@@ -1,0 +1,25 @@
+# Ignore Python cache
+__pycache__/
+
+# Ignore checkpoints and training outputs
+checkpoints/
+checkpointsAlex/
+
+# Ignore all WandB logs
+wandb/
+depGraph/wandb/
+
+# Ignore data directories
+AlexNet/__pycache__/
+AlexNet/data/
+data/
+depGraph/data/
+
+# Ignore specific large files
+*.ckpt
+*.pth
+*.tar.gz
+cifar-10-batches-py/
+
+# Ignore Git temporary files
+.git/objects/
