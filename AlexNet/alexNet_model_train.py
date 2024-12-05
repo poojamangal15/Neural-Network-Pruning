@@ -16,7 +16,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 import wandb
 
-# Define AlexNet model with CIFAR-10 adaptation
+# Define AlexNet model with CIFAR-10 dataset
 class AlexNetFineTuner(pl.LightningModule):
     def __init__(self, learning_rate=1e-4, num_classes=10):                             #TODO: Try different learning rates: e.g., 1e-3 or 5e-4
         super(AlexNetFineTuner, self).__init__()
@@ -75,7 +75,7 @@ class AlexNetFineTuner(pl.LightningModule):
 
 def main():
     # Initialize Weights & Biases logging
-    wandb.init(project="alexnet_cifar10", name="AlexNet_Training")
+    wandb.init(project="alexnet_cifar10", name="AlexNet_epoch5")
     wandb_logger = WandbLogger(log_model=False)
 
     # Data transformations for CIFAR-10
@@ -107,7 +107,7 @@ def main():
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
         dirpath='checkpointsAlex/',
-        filename='best-checkpoint',
+        filename='checkpoint_epoch_5',
         save_top_k=1,
         mode='min'
     )
