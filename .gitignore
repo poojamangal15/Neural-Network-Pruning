@@ -3,7 +3,6 @@ __pycache__/
 
 # Ignore checkpoints and training outputs
 checkpoints/
-checkpointsAlex/
 
 # Ignore all WandB logs
 wandb/

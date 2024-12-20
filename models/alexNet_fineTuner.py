@@ -10,9 +10,10 @@ class AlexNetFineTuner(pl.LightningModule):
         super(AlexNetFineTuner, self).__init__()
         self.save_hyperparameters()
 
-        # Load pre-trained AlexNet
+        # Load pre-trained AlexNet (set pretrained=True if you need ImageNet weights)
         self.model = models.alexnet(pretrained=False)
-        self.model.classifier[6] = nn.Linear(4096, num_classes)  # Update the classifier layer
+        self.model.classifier[6] = nn.Linear(4096, num_classes)
+
         self.test_outputs = []
 
     def forward(self, x):
@@ -20,7 +21,6 @@ class AlexNetFineTuner(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         images, labels = batch
-        images, labels = images.to(self.device), labels.to(self.device)
         outputs = self(images)
         loss = F.cross_entropy(outputs, labels)
         preds = torch.argmax(outputs, dim=1)
@@ -31,7 +31,6 @@ class AlexNetFineTuner(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         images, labels = batch
-        images, labels = images.to(self.device), labels.to(self.device)
         outputs = self(images)
         val_loss = F.cross_entropy(outputs, labels)
         preds = torch.argmax(outputs, dim=1)
@@ -42,11 +41,11 @@ class AlexNetFineTuner(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         images, labels = batch
-        images, labels = images.to(self.device), labels.to(self.device)
         outputs = self(images)
         test_loss = F.cross_entropy(outputs, labels)
         preds = torch.argmax(outputs, dim=1)
         test_acc = (preds == labels).float().mean()
+
         self.test_outputs.append({"test_loss": test_loss.item(), "test_acc": test_acc.item()})
         self.log("test_loss_batch", test_loss, prog_bar=True)
         self.log("test_acc_batch", test_acc, prog_bar=True)
