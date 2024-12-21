@@ -1,12 +1,12 @@
 # Ignore Python cache
 __pycache__/
+models/__pycache__/
 
 # Ignore checkpoints and training outputs
 checkpoints/
 
 # Ignore all WandB logs
 wandb/
-depGraph/wandb/
 
 # Ignore data directories
 AlexNet/__pycache__/
