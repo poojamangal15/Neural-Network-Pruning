@@ -5,11 +5,12 @@ import wandb
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 
-from models.depGraph_fineTuner import DepGraphFineTuner  # Note: We now use DepGraphFineTuner
+from models.depGraph_fineTuner import DepGraphFineTuner
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model
 from utils.plot_utils import plot_metrics
 from utils.device_utils import get_device
+from utils.pruning_analysis import get_pruned_indices_and_counts, get_unpruned_indices_and_counts, count_parameters
 
 def prune_model(model, device, pruning_percentage=0.2):
     
@@ -19,15 +20,18 @@ def prune_model(model, device, pruning_percentage=0.2):
     print("MODEL BEFORE PRUNING:\n", model.model)
 
     DG = tp.DependencyGraph().build_dependency(model.model, example_inputs)
-
     layers_to_prune = {
-        "conv2": model.model.features[3],
-        "conv3": model.model.features[6],
-        "conv4": model.model.features[8],
-        "conv5": model.model.features[10],
-        "fc1": model.model.classifier[1],
-        "fc2": model.model.classifier[4]
+        "model.features.3": model.model.features[3],
+        "model.features.6": model.model.features[6],
+        "model.features.8": model.model.features[8],
+        "model.features.10": model.model.features[10],
+        "model.classifier.1": model.model.classifier[1],
+        "model.classifier.4": model.model.classifier[4],
     }
+
+
+     # Dictionary to store pruned channels: layer_name -> list_of_pruned_channel_indices
+    pruned_channels_dict = {}
 
     def get_pruning_indices(module, percentage):
         with torch.no_grad():
@@ -63,9 +67,13 @@ def prune_model(model, device, pruning_percentage=0.2):
         group = DG.get_pruning_group(layer_module, prune_fn, idxs=pruning_idxs)
         if DG.check_pruning_group(group):
             groups.append((layer_name, group))
+            pruned_channels_dict[layer_name] = pruning_idxs
+
         else:
             print(f"Invalid pruning group for layer {layer_name}, skipping pruning.")
 
+    print("Pruning Groups:", groups)
+    print("Pruned Channels Dict:", pruned_channels_dict)
     if groups:
         print(f"Pruning with {pruning_percentage*100}% percentage on {len(groups)} layers...")
         for layer_name, group in groups:
@@ -76,7 +84,7 @@ def prune_model(model, device, pruning_percentage=0.2):
     else:
         print("No valid pruning groups found. The model was not pruned.")
 
-    return model
+    return model, pruned_channels_dict
 
 def main():
     wandb.init(project='alexnet_depGraph', name='AlexNet_Prune_Run')
@@ -95,7 +103,7 @@ def main():
     }
 
     train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
-    pruning_percentages = [0.5]
+    pruning_percentages = [0.9]
 
     trainer = pl.Trainer(max_epochs=5 , logger=wandb_logger, accelerator=device.type)
 
@@ -103,19 +111,45 @@ def main():
         print(f"Applying {pruning_percentage * 100}% pruning...")
         model_to_be_pruned = copy.deepcopy(model)
 
+         # Count parameters before pruning
+        orig_params = count_parameters(model_to_be_pruned)
+        print(f"Original number of parameters: {orig_params}")
+
         # Evaluate before pruning
         orig_accuracy, orig_f1 = evaluate_model(model_to_be_pruned, test_dataloader, device)
         print(f"Original Accuracy: {orig_accuracy:.4f}, Original F1 Score: {orig_f1:.4f}")
 
         # Prune the model
-        model_to_be_pruned = prune_model(model_to_be_pruned, device, pruning_percentage=pruning_percentage)
+        model_to_be_pruned, pruned_channels_dict = prune_model(model_to_be_pruned, device, pruning_percentage=pruning_percentage)
         model_to_be_pruned = model_to_be_pruned.to(device)
+        print("Pruned Channels Dict in main:", pruned_channels_dict)
+
+        # Count parameters after pruning
+        pruned_params = count_parameters(model_to_be_pruned)
+        print(f"Number of parameters after pruning: {pruned_params}")
+        print(f"Parameters reduced by: {orig_params - pruned_params} ({((orig_params - pruned_params) / orig_params) * 100:.2f}%)")
+
+        pruned_info, num_pruned_channels, pruned_weights = get_pruned_indices_and_counts(
+            original_model=model,
+            pruned_channels_dict=pruned_channels_dict
+        )
+        print("Pruned Info:", pruned_info)
+        print("Num Pruned Channels:", num_pruned_channels)
 
         # Fine-tune the pruned model using the method from DepGraphFineTuner
-        # (if loaders are available)
         if train_dataloader is not None and val_dataloader is not None:
             print("Starting post-pruning fine-tuning of the pruned model...")
             model_to_be_pruned.fine_tune_model(train_dataloader, val_dataloader, epochs=5, learning_rate=1e-5)
+
+        non_pruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_indices_and_counts(model_to_be_pruned)
+        print("Unpruned Channel Info:", non_pruned_info)
+        print("Number of Unpruned Channels Per Layer:", num_unpruned_channels)
+        print("Unpruned Weights: ", unpruned_weights)
+
+        wandb.log({
+            "num_pruned_channels": num_pruned_channels,
+            "num_unpruned_channels": num_unpruned_channels
+        })
 
         # Test the pruned model
         trainer.test(model_to_be_pruned, dataloaders=test_dataloader)

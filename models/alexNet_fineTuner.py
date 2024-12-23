@@ -9,7 +9,7 @@ class AlexNetFineTuner(pl.LightningModule):
     def __init__(self, learning_rate=1e-4, num_classes=10):
         super(AlexNetFineTuner, self).__init__()
         self.save_hyperparameters()
-
+    
         # Load pre-trained AlexNet (set pretrained=True if you need ImageNet weights)
         self.model = models.alexnet(pretrained=False)
         self.model.classifier[6] = nn.Linear(4096, num_classes)
