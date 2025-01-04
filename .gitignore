@@ -22,3 +22,4 @@ cifar-10-batches-py/
 
 # Ignore Git temporary files
 .git/objects/
+venv/
