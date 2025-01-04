@@ -10,7 +10,7 @@ from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model
 from utils.plot_utils import plot_metrics
 from utils.device_utils import get_device
-from utils.pruning_analysis import count_parameters, rebuild_model, get_dependency_pruned_info, get_pruned_info
+from utils.pruning_analysis import count_parameters, get_pruned_info
 
 def prune_model(original_model, model, device, pruning_percentage=0.2):
     pruned_info = {}
@@ -86,8 +86,8 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
     pruned_info, num_pruned_channels, pruned_weights = get_pruned_info(groups, original_model)
 
     # Print the pruned info
-    print("PRUNED INFO", pruned_info)
-    print("Num pruned channels", num_pruned_channels)
+    # print("PRUNED INFO", pruned_info)
+    # print("Num pruned channels", num_pruned_channels)
     print("PRUNED WEIGHTS------>", pruned_weights)
 
     # for layer, info in pruned_info.items():
