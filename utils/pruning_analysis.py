@@ -107,3 +107,68 @@ def get_pruned_info(groups, original_model):
 
 
     return pruned_info, num_pruned_channels, pruned_weights
+
+
+def get_unpruned_info(groups, original_model):
+    unpruned_info = {}
+    num_unpruned_channels = {}
+    unpruned_weights = {}
+
+    # Access the actual model inside DepGraphFineTuner
+    module_dict = dict(original_model.named_modules())
+
+    for layer_name, group in groups:
+        # Remove the "model." prefix if it exists
+        if layer_name.startswith("model."):
+            layer_name = layer_name[len("model."):]
+
+        if layer_name not in unpruned_info:
+            unpruned_info[layer_name] = {'unpruned_dim0': [], 'unpruned_dim1': []}
+
+        # Total indices (output and input channels)
+        total_output_channels = None
+        total_input_channels = None
+
+        layer = module_dict.get(layer_name)
+        if isinstance(layer, torch.nn.Conv2d):
+            total_output_channels = layer.weight.shape[0]
+            total_input_channels = layer.weight.shape[1]
+        elif isinstance(layer, torch.nn.Linear):
+            total_output_channels = layer.weight.shape[0]
+            total_input_channels = layer.weight.shape[1]
+
+        # Get all indices
+        all_output_indices = list(range(total_output_channels)) if total_output_channels else []
+        all_input_indices = list(range(total_input_channels)) if total_input_channels else []
+
+        # Determine pruned indices from the group
+        pruned_dim0 = []
+        pruned_dim1 = []
+        for item in group.items:
+            pruned_indices = item.idxs
+            if "out_channels" in str(item):
+                pruned_dim0.extend(pruned_indices)
+            elif "in_channels" in str(item):
+                pruned_dim1.extend(pruned_indices)
+
+        # Determine unpruned indices by subtracting pruned indices
+        unpruned_dim0 = [i for i in all_output_indices if i not in pruned_dim0]
+        unpruned_dim1 = [i for i in all_input_indices if i not in pruned_dim1]
+
+        # Populate unpruned info
+        unpruned_info[layer_name]['unpruned_dim0'] = unpruned_dim0
+        unpruned_info[layer_name]['unpruned_dim1'] = unpruned_dim1
+        num_unpruned_channels[layer_name] = (len(unpruned_dim0), len(unpruned_dim1))
+
+        # Get weights of unpruned neurons
+        if layer is not None:
+            weights = layer.weight.detach().cpu()
+            if isinstance(layer, torch.nn.Conv2d):
+                unpruned_weights[layer_name] = weights[unpruned_dim0][:, unpruned_dim1, :, :]
+            elif isinstance(layer, torch.nn.Linear):
+                unpruned_weights[layer_name] = weights[unpruned_dim0][:, unpruned_dim1]
+        else:
+            print(f"Layer {layer_name} not found. Skipping.")
+            unpruned_weights[layer_name] = None
+
+    return unpruned_info, num_unpruned_channels, unpruned_weights

@@ -10,7 +10,7 @@ from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model
 from utils.plot_utils import plot_metrics
 from utils.device_utils import get_device
-from utils.pruning_analysis import count_parameters, get_pruned_info
+from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info
 
 def prune_model(original_model, model, device, pruning_percentage=0.2):
     pruned_info = {}
@@ -84,24 +84,9 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
     
     # Get pruned information
     pruned_info, num_pruned_channels, pruned_weights = get_pruned_info(groups, original_model)
+    unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info(groups, original_model)
 
-    # Print the pruned info
-    # print("PRUNED INFO", pruned_info)
-    # print("Num pruned channels", num_pruned_channels)
-    print("PRUNED WEIGHTS------>", pruned_weights)
-
-    # for layer, info in pruned_info.items():
-    #     print(f"Layer: {layer}")
-    #     print(f"  Pruned dim0 (output channels): {info['pruned_dim0']}")
-    #     print(f"  Pruned dim1 (input channels): {info['pruned_dim1']}")
-
-    # print(f"Type of pruned_info: {type(pruned_info)}")
-
-    # pruning_info, num_pruned_channels, pruned_weights = get_dependency_pruned_info(model.model,layers_to_prune, pruned_info)
-
-    # print("PRUNED INFO---------_>", pruning_info)
-    # print("Num pruned channels", num_pruned_channels)
-    # print("Pruned weights", pruned_weights)
+    print("Pruned weights", pruned_weights)
     return model
 
 def main():
