@@ -10,7 +10,7 @@ from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model
 from utils.plot_utils import plot_metrics
 from utils.device_utils import get_device
-from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info
+from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info, extend_channels
 
 def prune_model(original_model, model, device, pruning_percentage=0.2):
     pruned_info = {}
@@ -26,8 +26,6 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
         "model.features.6": model.model.features[6],
         "model.features.8": model.model.features[8],
         "model.features.10": model.model.features[10],
-        "model.classifier.1": model.model.classifier[1],
-        "model.classifier.4": model.model.classifier[4],
     }
 
 
@@ -36,8 +34,6 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
             weight = module.weight.data
             if isinstance(module, torch.nn.Conv2d):
                 channel_norms = weight.abs().mean(dim=[1,2,3])  
-            elif isinstance(module, torch.nn.Linear):
-                channel_norms = weight.abs().mean(dim=1)
             else:
                 return None
 
@@ -51,27 +47,22 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
     for layer_name, layer_module in layers_to_prune.items():
         if isinstance(layer_module, torch.nn.Conv2d):
             prune_fn = tp.prune_conv_out_channels
-        elif isinstance(layer_module, torch.nn.Linear):
-            prune_fn = tp.prune_linear_out_channels
         else:
             print(f"Skipping {layer_name}: Unsupported layer type {type(layer_module)}")
             continue
         
-        # print("PRUNE FN-------", prune_fn)
         pruning_idxs = get_pruning_indices(layer_module, pruning_percentage)
         if pruning_idxs is None or len(pruning_idxs) == 0:
             print(f"No channels to prune for {layer_name}.")
             continue
 
         group = DG.get_pruning_group(layer_module, prune_fn, idxs=pruning_idxs)
-        # print("group", group)
         # print("group.details()", group.details()) 
         if DG.check_pruning_group(group):
             groups.append((layer_name, group))
         else:
             print(f"Invalid pruning group for layer {layer_name}, skipping pruning.")
 
-    # print("Pruning Groups:", groups)
     if groups:
         print(f"Pruning with {pruning_percentage*100}% percentage on {len(groups)} layers...")
         for layer_name, group in groups:
@@ -81,13 +72,13 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
         print("MODEL AFTER PRUNING:\n", model.model)
     else:
         print("No valid pruning groups found. The model was not pruned.")
-    
-    # Get pruned information
+
+    # Check for all the pruned and unpruned indices and weights    
     pruned_info, num_pruned_channels, pruned_weights = get_pruned_info(groups, original_model)
     unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info(groups, original_model)
 
-    print("Pruned weights", pruned_weights)
-    return model
+    pruned_and_unpruned_info = [pruned_info, num_pruned_channels, pruned_weights, unpruned_info, num_unpruned_channels, unpruned_weights]
+    return model, pruned_and_unpruned_info
 
 def main():
     wandb.init(project='alexnet_depGraph', name='AlexNet_Prune_Run')
@@ -95,7 +86,7 @@ def main():
 
     device = get_device()
     checkpoint_path = "./checkpoints/best_checkpoint.ckpt"
-    # Load DepGraphFineTuner instead of AlexNetFineTuner so we can call fine_tune_model later
+
     model = DepGraphFineTuner.load_from_checkpoint(checkpoint_path).to(device)
 
     metrics = {
@@ -123,11 +114,11 @@ def main():
         print(f"Original Accuracy: {orig_accuracy:.4f}, Original F1 Score: {orig_f1:.4f}")
 
         # Prune the model
-        model_to_be_pruned = prune_model(model.model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
-        model_to_be_pruned = model_to_be_pruned.to(device)
+        core_model, pruned_and_unpruned_info = prune_model(model.model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
+        core_model = core_model.to(device)
 
         # Count parameters after pruning
-        pruned_params = count_parameters(model_to_be_pruned)
+        pruned_params = count_parameters(core_model)
         print(f"Number of parameters after pruning: {pruned_params}")
         print(f"Parameters reduced by: {orig_params - pruned_params} ({((orig_params - pruned_params) / orig_params) * 100:.2f}%)")
 
@@ -135,8 +126,10 @@ def main():
         # Fine-tune the pruned model using the method from DepGraphFineTuner
         if train_dataloader is not None and val_dataloader is not None:
             print("Starting post-pruning fine-tuning of the pruned model...")
-            model_to_be_pruned.fine_tune_model(train_dataloader, val_dataloader, epochs=1, learning_rate=1e-5)
+            core_model.fine_tune_model(train_dataloader, val_dataloader, epochs=1, learning_rate=1e-5)
 
+        new_channels = extend_channels(core_model, pruned_and_unpruned_info.num_pruned_channels)
+        print(new_channels)
         # # Save the pruned model's state dictionary
         # pruned_model_path = f"./pruned_models/alexnet_pruned_{int(pruning_percentage * 100)}.pth"
         # torch.save(model_to_be_pruned.state_dict(), pruned_model_path)

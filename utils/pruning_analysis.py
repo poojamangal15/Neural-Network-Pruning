@@ -73,33 +73,10 @@ def get_pruned_info(groups, original_model):
             pruned_weights[layer_name] = torch.empty((0, 0))
             continue
 
-        if isinstance(layer, torch.nn.Conv2d):
-            weights = layer.weight.detach()
-            if pruned_dim0 or pruned_dim1:  # If there are pruned dimensions
-                pruned_weight_tensor = weights[pruned_dim0][:, pruned_dim1, :, :]
-                pruned_weights[layer_name] = pruned_weight_tensor
-        elif isinstance(layer, torch.nn.Linear):
-            weights = layer.weight.detach()
-            if pruned_dim0 or pruned_dim1:  # If there are pruned dimensions
-                pruned_weight_tensor = weights[pruned_dim0][:, pruned_dim1]
-                pruned_weights[layer_name] = pruned_weight_tensor
-        
-            # for name, layer in original_model.named_modules():
-    #     # Access the original unpruned weights
-    #     print("LAYER-----", layer)
-    #     weights = layer.weight.detach()
-    #     print(f"Layer: {layer_name}, Weights shape: {weights.shape}")
-
-    #     pruned_dim0 = pruned_info[name]['pruned_dim0']
-    #     pruned_dim1 = pruned_info[name]['pruned_dim1']
-    #     if pruned_dim0 or pruned_dim1:
-    #         try:
-    #             pruned_weights[name] = weights[pruned_dim0][:, pruned_dim1, :, :]
-    #         except IndexError as e:
-    #             print(f"IndexError for layer {name}: {e}. Skipping weights.")
-    #             pruned_weights[name] = None
-    #     else:
-    #         pruned_weights[name] = None
+        weights = layer.weight.detach()
+        if pruned_dim0 or pruned_dim1:  # If there are pruned dimensions
+            pruned_weight_tensor = weights[pruned_dim0][:, pruned_dim1, :, :]
+            pruned_weights[layer_name] = pruned_weight_tensor
 
     for layer_name in pruned_info:
         pruned_info[layer_name]['pruned_dim0'] = sorted(pruned_info[layer_name]['pruned_dim0'])
@@ -133,10 +110,7 @@ def get_unpruned_info(groups, original_model):
         if isinstance(layer, torch.nn.Conv2d):
             total_output_channels = layer.weight.shape[0]
             total_input_channels = layer.weight.shape[1]
-        elif isinstance(layer, torch.nn.Linear):
-            total_output_channels = layer.weight.shape[0]
-            total_input_channels = layer.weight.shape[1]
-
+       
         # Get all indices
         all_output_indices = list(range(total_output_channels)) if total_output_channels else []
         all_input_indices = list(range(total_input_channels)) if total_input_channels else []
@@ -172,3 +146,17 @@ def get_unpruned_info(groups, original_model):
             unpruned_weights[layer_name] = None
 
     return unpruned_info, num_unpruned_channels, unpruned_weights
+
+
+def extend_channels(model, pruned_dict):
+    
+    new_channel_dict = {}
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Conv2d):
+            
+            new_in_channel = int(module.weight.data.shape[0] + pruned_dict[name][0])
+            new_out_channel = int(module.weight.data.shape[1] + pruned_dict[name][1])
+            
+            new_channel_dict[name] = (new_in_channel, new_out_channel)
+            
+    return new_channel_dict
