@@ -10,7 +10,7 @@ from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model
 from utils.plot_utils import plot_metrics
 from utils.device_utils import get_device
-from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info, extend_channels
+from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info, extend_channels, AlexNet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels
 
 def prune_model(original_model, model, device, pruning_percentage=0.2):
     pruned_info = {}
@@ -77,7 +77,12 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
     pruned_info, num_pruned_channels, pruned_weights = get_pruned_info(groups, original_model)
     unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info(groups, original_model)
 
-    pruned_and_unpruned_info = [pruned_info, num_pruned_channels, pruned_weights, unpruned_info, num_unpruned_channels, unpruned_weights]
+    pruned_and_unpruned_info = {"pruned_info": pruned_info, 
+                                "num_pruned_channels": num_pruned_channels, 
+                                "pruned_weights": pruned_weights, 
+                                "unpruned_info": unpruned_info, 
+                                "num_unpruned_channels": num_unpruned_channels, 
+                                "unpruned_weights": unpruned_weights}
     return model, pruned_and_unpruned_info
 
 def main():
@@ -128,8 +133,25 @@ def main():
             print("Starting post-pruning fine-tuning of the pruned model...")
             core_model.fine_tune_model(train_dataloader, val_dataloader, epochs=1, learning_rate=1e-5)
 
-        new_channels = extend_channels(core_model, pruned_and_unpruned_info.num_pruned_channels)
-        print(new_channels)
+        new_channels = extend_channels(core_model, pruned_and_unpruned_info["num_pruned_channels"])
+        
+        last_conv_out_features, last_conv_shape = calculate_last_conv_out_features(model.model)
+        print(f"Last Conv Out Features: {last_conv_out_features}")
+        print(f"Last Conv Shape: {last_conv_shape}")
+
+        rebuilt_model = AlexNet_General(new_channels, last_conv_shape).to(device)
+        get_core_weights(core_model, pruned_and_unpruned_info["unpruned_weights"])
+
+        rebuilt_model = reconstruct_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
+        rebuilt_model = freeze_channels(rebuilt_model, pruned_and_unpruned_info["unpruned_info"])
+
+        print(rebuilt_model)
+
+        # Fine-tune the pruned model using the method from DepGraphFineTuner
+        if train_dataloader is not None and val_dataloader is not None:
+            print("Starting post-pruning fine-tuning of the pruned model...")
+            rebuilt_model.fine_tune_model(train_dataloader, val_dataloader, epochs=1, learning_rate=1e-5)
+
         # # Save the pruned model's state dictionary
         # pruned_model_path = f"./pruned_models/alexnet_pruned_{int(pruning_percentage * 100)}.pth"
         # torch.save(model_to_be_pruned.state_dict(), pruned_model_path)
@@ -141,8 +163,6 @@ def main():
         # print(f"Pruned model saved to: {pruned_model_path}")
         # print(f"Pruned info saved to: {pruned_info_path}")
         
-        rebuilt_model = rebuild_model(model_to_be_pruned, pruned_info)
-
         # Test the pruned model
         trainer.test(model_to_be_pruned, dataloaders=test_dataloader)
 
