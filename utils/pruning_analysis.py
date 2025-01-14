@@ -44,6 +44,7 @@ def get_pruned_info(groups, original_model):
     # --------------------------------------------------------------------------
     # GATHER PRUNED INDICES
     # --------------------------------------------------------------------------
+    next_pruned_indices = []
     for layer_name, group in groups:
 
         layer = module_dict.get(layer_name, None)
@@ -79,7 +80,8 @@ def get_pruned_info(groups, original_model):
                 pruned_info[layer_name]['pruned_dim0'].update(pruned_indices)
 
                 if "in_channels" in str(item):
-                    pruned_info[layer_name]['pruned_dim1'].update(pruned_indices)
+                    pruned_info[layer_name]['pruned_dim1'].update(next_pruned_indices)
+                    next_pruned_indices = pruned_indices
 
             elif "in_channels" in str(item):
                 pruned_info[layer_name]['pruned_dim1'].update(pruned_indices)
@@ -112,9 +114,9 @@ def get_pruned_info(groups, original_model):
         else:
             pruned_weights[layer_name] = torch.empty((0, 0))
 
-    print("\n[DEBUG] Unpruned Info summary:")
-    for ln, info in pruned_info.items():
-        print(f"  -> {ln}, pruned_dim0={info['pruned_dim0']}, unpruned_dim1={info['pruned_dim1']}")
+    # print("\n[DEBUG] pruned Info summary:")
+    # for ln, info in pruned_info.items():
+    #     print(f"  -> {ln}, pruned_dim0={info['pruned_dim0']}, unpruned_dim1={info['pruned_dim1']}")
 
     print("\nnum_pruned_channels:", num_pruned_channels)
     return pruned_info, num_pruned_channels, pruned_weights
@@ -129,16 +131,9 @@ def get_unpruned_info(groups, original_model):
 
     module_dict = dict(original_model.named_modules())
 
-    # Debug: Show all layer names in original_model
-    print("Available layers in original_model:")
-    for m_name, _ in module_dict.items():
-        print("  ", m_name)
+    for layer_name, group in groups:
+        print(f"\nDEBUG: Processing group layer_name={layer_name}")
 
-    for original_group_name, group in groups:
-        print(f"\nDEBUG: Processing group layer_name={original_group_name}")
-
-        # We'll attempt to handle the "model." prefix
-        layer_name = original_group_name  # start with the group name as given
         layer = module_dict.get(layer_name, None)
 
         if layer is None and layer_name.startswith("model."):
@@ -160,13 +155,7 @@ def get_unpruned_info(groups, original_model):
         if isinstance(layer, torch.nn.Conv2d):
             total_output_channels = layer.weight.shape[0]
             total_input_channels  = layer.weight.shape[1]
-            print(f"      [DEBUG] out_ch={total_output_channels}, in_ch={total_input_channels}")
-        else:
-            # For Linear or something else
-            weight_shape = getattr(layer.weight, 'shape', (None, None))
-            total_output_channels = weight_shape[0]
-            total_input_channels  = weight_shape[1]
-            print(f"      [DEBUG] (Linear or other) out_ch={total_output_channels}, in_ch={total_input_channels}")
+            # print(f"      [DEBUG] out_ch={total_output_channels}, in_ch={total_input_channels}")
 
         # Build all_output_indices and all_input_indices
         all_output_indices = list(range(total_output_channels)) if total_output_channels else []
@@ -176,13 +165,12 @@ def get_unpruned_info(groups, original_model):
         pruned_dim0 = []
         pruned_dim1 = []
         
-        # Debug: show group items
-        print("  [DEBUG] group items:")
+        # print("  [DEBUG] group items:")
         for i, item in enumerate(group.items):
-            print(f"    Item {i}: {item}")
+            # print(f"    Item {i}: {item}")
             # item.idxs are the pruned indices for either out_ch or in_ch
             pruned_indices = item.idxs
-            print(f"      Indices: {pruned_indices}")
+            # print(f"      Indices: {pruned_indices}")
             
             if "out_channels" in str(item):
                 pruned_dim0.extend(pruned_indices)
@@ -225,10 +213,10 @@ def get_unpruned_info(groups, original_model):
             unpruned_weights[layer_name] = None
 
     # Final debug summary
-    print("\n[DEBUG] Unpruned Info summary:")
-    for ln, info in unpruned_info.items():
-        print(f"  -> {ln}, unpruned_dim0={info['unpruned_dim0']}, unpruned_dim1={info['unpruned_dim1']}")
-    print("\n[DEBUG] num_unpruned_channels:", num_unpruned_channels)
+    # print("\n[DEBUG] Unpruned Info summary:")
+    # for ln, info in unpruned_info.items():
+    #     print(f"  -> {ln}, unpruned_dim0={info['unpruned_dim0']}, unpruned_dim1={info['unpruned_dim1']}")
+    # print("\n[DEBUG] num_unpruned_channels:", num_unpruned_channels)
     
     return unpruned_info, num_unpruned_channels, unpruned_weights
 
@@ -248,12 +236,10 @@ def extend_channels(model, pruned_dict):
             # Handle the first layer (features.0) differently
             print("name, pruned dict", name, pruned_dict.get(name, (0, 0))[0])
             print("module.weight" ,module.weight.data.shape[1])
-            if name == "features.0":
-                new_in_channel = 3  # Input to the first Conv2d is always 3 (RGB images)
-                new_out_channel = module.weight.data.shape[0] + pruned_dict.get(name, (0, 0))[0]
-            else:
-                new_in_channel = module.weight.data.shape[1] + pruned_dict.get(name, (0, 0))[1]
-                new_out_channel = module.weight.data.shape[0] + pruned_dict.get(name, (0, 0))[0]
+
+            new_in_channel = module.weight.data.shape[1] + pruned_dict.get(name, (0, 0))[1]
+            new_out_channel = module.weight.data.shape[0] + pruned_dict.get(name, (0, 0))[0]
+            print("new in and out channels", new_in_channel, new_out_channel)
 
             new_channel_dict[name] = (int(new_out_channel), int(new_in_channel))
 

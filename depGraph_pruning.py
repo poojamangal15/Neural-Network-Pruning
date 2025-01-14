@@ -42,7 +42,7 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
                 return []
             _, prune_indices = torch.topk(channel_norms, pruning_count, largest=False)
             return prune_indices.tolist()
-
+ 
     groups = []
     for layer_name, layer_module in layers_to_prune.items():
         if isinstance(layer_module, torch.nn.Conv2d):
@@ -57,7 +57,7 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
             continue
 
         group = DG.get_pruning_group(layer_module, prune_fn, idxs=pruning_idxs)
-        print("group.details()", group.details()) 
+        # print("group.details()", group.details()) 
         if DG.check_pruning_group(group):
             groups.append((layer_name, group))
         else:
