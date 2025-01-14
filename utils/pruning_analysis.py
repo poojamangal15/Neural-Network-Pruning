@@ -39,7 +39,6 @@ def get_pruned_info(groups, original_model):
     num_pruned_channels = {}
     pruned_weights = {}
 
-    # Build a lookup so we can reference layers by name
     module_dict = dict(original_model.named_modules())
 
     # --------------------------------------------------------------------------
@@ -47,15 +46,12 @@ def get_pruned_info(groups, original_model):
     # --------------------------------------------------------------------------
     for layer_name, group in groups:
 
-        # Attempt to fetch the layer using the original name
         layer = module_dict.get(layer_name, None)
 
-        # If not found, try removing the "model." prefix
         if layer is None and layer_name.startswith("model."):
             layer_name = layer_name[len("model."):]
             layer = module_dict.get(layer_name, None)
 
-        # If still not found, skip this layer
         if layer is None:
             print(f"Layer '{layer_name}' not found in original_model. Skipping.")
             continue
@@ -63,13 +59,13 @@ def get_pruned_info(groups, original_model):
         print(f"Processing layer: {layer_name}")
 
         # Initialize the sets for collecting pruned indices
+        # used sets since they are a lot of repetitive values causing channel number mismatch
         if layer_name not in pruned_info:
             pruned_info[layer_name] = {
                 'pruned_dim0': set(),  # out-ch
                 'pruned_dim1': set()   # in-ch
             }
 
-        # Process each item in the group
         for i, item in enumerate(group.items):
             pruned_indices = item.idxs
 
@@ -79,7 +75,6 @@ def get_pruned_info(groups, original_model):
                     print(f"Error: Pruned indices exceed dimensions for {layer_name}")
                     pruned_indices = [idx for idx in pruned_indices if idx < layer.weight.shape[0]]
 
-            # Assign indices to the appropriate dimension
             if "out_channels" in str(item):
                 pruned_info[layer_name]['pruned_dim0'].update(pruned_indices)
 
@@ -93,26 +88,23 @@ def get_pruned_info(groups, original_model):
     # FINALIZE pruned_info, num_pruned_channels, and pruned_weights
     # --------------------------------------------------------------------------
     for layer_name in pruned_info:
-        # Convert sets to sorted lists
+
         dim0_list = sorted(pruned_info[layer_name]['pruned_dim0'])
         dim1_list = sorted(pruned_info[layer_name]['pruned_dim1'])
 
         pruned_info[layer_name]['pruned_dim0'] = dim0_list
         pruned_info[layer_name]['pruned_dim1'] = dim1_list
 
-        # Count pruned channels
         pruned_dim0_count = len(dim0_list)
         pruned_dim1_count = len(dim1_list)
         num_pruned_channels[layer_name] = (pruned_dim0_count, pruned_dim1_count)
 
-        # Retrieve weights for the layer
         layer = module_dict.get(layer_name, None)
         if layer is None:
             print(f"Layer {layer_name} not found in model. Skipping pruned_weights.")
             pruned_weights[layer_name] = torch.empty((0, 0))
             continue
 
-        # Store pruned weights for Conv2D layers
         if isinstance(layer, nn.Conv2d) and (pruned_dim0_count > 0 or pruned_dim1_count > 0):
             weights = layer.weight.detach()
             pruned_weight_tensor = weights[dim0_list][:, dim1_list, :, :]
@@ -120,70 +112,126 @@ def get_pruned_info(groups, original_model):
         else:
             pruned_weights[layer_name] = torch.empty((0, 0))
 
-    print("\n[DEBUG] num_pruned_channels:", num_pruned_channels)
+    print("\n[DEBUG] Unpruned Info summary:")
+    for ln, info in pruned_info.items():
+        print(f"  -> {ln}, pruned_dim0={info['pruned_dim0']}, unpruned_dim1={info['pruned_dim1']}")
+
+    print("\nnum_pruned_channels:", num_pruned_channels)
     return pruned_info, num_pruned_channels, pruned_weights
 
 
 def get_unpruned_info(groups, original_model):
+    import torch
+    
     unpruned_info = {}
     num_unpruned_channels = {}
     unpruned_weights = {}
 
-    # Access the actual model inside DepGraphFineTuner
     module_dict = dict(original_model.named_modules())
 
-    for layer_name, group in groups:
-        # Remove the "model." prefix if it exists
-        if layer_name.startswith("model."):
-            layer_name = layer_name[len("model."):]
+    # Debug: Show all layer names in original_model
+    print("Available layers in original_model:")
+    for m_name, _ in module_dict.items():
+        print("  ", m_name)
 
+    for original_group_name, group in groups:
+        print(f"\nDEBUG: Processing group layer_name={original_group_name}")
+
+        # We'll attempt to handle the "model." prefix
+        layer_name = original_group_name  # start with the group name as given
+        layer = module_dict.get(layer_name, None)
+
+        if layer is None and layer_name.startswith("model."):
+            # Remove the prefix and try again
+            layer_name = layer_name[len("model."):]  # Reassign directly
+            layer = module_dict.get(layer_name, None)
+
+        if layer is None:
+            print(f"  -> Could not find layer '{layer_name}' in module_dict. Skipping.")
+            continue
+        
+        print(f"  -> Found layer '{layer_name}' in original_model: {layer}")
+
+        # Initialize unpruned_info if this is the first time we see this layer
         if layer_name not in unpruned_info:
             unpruned_info[layer_name] = {'unpruned_dim0': [], 'unpruned_dim1': []}
 
-        # Total indices (output and input channels)
-        total_output_channels = None
-        total_input_channels = None
-
-        layer = module_dict.get(layer_name)
+        # If it's Conv2d, store shape info
         if isinstance(layer, torch.nn.Conv2d):
             total_output_channels = layer.weight.shape[0]
-            total_input_channels = layer.weight.shape[1]
-       
-        # Get all indices
-        all_output_indices = list(range(total_output_channels)) if total_output_channels else []
-        all_input_indices = list(range(total_input_channels)) if total_input_channels else []
+            total_input_channels  = layer.weight.shape[1]
+            print(f"      [DEBUG] out_ch={total_output_channels}, in_ch={total_input_channels}")
+        else:
+            # For Linear or something else
+            weight_shape = getattr(layer.weight, 'shape', (None, None))
+            total_output_channels = weight_shape[0]
+            total_input_channels  = weight_shape[1]
+            print(f"      [DEBUG] (Linear or other) out_ch={total_output_channels}, in_ch={total_input_channels}")
 
-        # Determine pruned indices from the group
+        # Build all_output_indices and all_input_indices
+        all_output_indices = list(range(total_output_channels)) if total_output_channels else []
+        all_input_indices  = list(range(total_input_channels))  if total_input_channels else []
+
+        # Track pruned indices
         pruned_dim0 = []
         pruned_dim1 = []
-        for item in group.items:
+        
+        # Debug: show group items
+        print("  [DEBUG] group items:")
+        for i, item in enumerate(group.items):
+            print(f"    Item {i}: {item}")
+            # item.idxs are the pruned indices for either out_ch or in_ch
             pruned_indices = item.idxs
+            print(f"      Indices: {pruned_indices}")
+            
             if "out_channels" in str(item):
                 pruned_dim0.extend(pruned_indices)
             elif "in_channels" in str(item):
                 pruned_dim1.extend(pruned_indices)
+                
+        # Deduplicate in case the same indices appear multiple times
+        pruned_dim0 = sorted(set(pruned_dim0))
+        pruned_dim1 = sorted(set(pruned_dim1))
 
-        # Determine unpruned indices by subtracting pruned indices
+        # Compute the unpruned
         unpruned_dim0 = [i for i in all_output_indices if i not in pruned_dim0]
-        unpruned_dim1 = [i for i in all_input_indices if i not in pruned_dim1]
-
-        # Populate unpruned info
+        unpruned_dim1 = [i for i in all_input_indices  if i not in pruned_dim1]
+        
+        # print(f"  [DEBUG] pruned_dim0={pruned_dim0}")
+        # print(f"  [DEBUG] pruned_dim1={pruned_dim1}")
+        # print(f"  [DEBUG] unpruned_dim0={unpruned_dim0}")
+        # print(f"  [DEBUG] unpruned_dim1={unpruned_dim1}")
+        
         unpruned_info[layer_name]['unpruned_dim0'] = unpruned_dim0
         unpruned_info[layer_name]['unpruned_dim1'] = unpruned_dim1
         num_unpruned_channels[layer_name] = (len(unpruned_dim0), len(unpruned_dim1))
 
-        # Get weights of unpruned neurons
-        if layer is not None:
+        # Extract unpruned weights
+        if isinstance(layer, torch.nn.Conv2d):
             weights = layer.weight.detach().cpu()
-            if isinstance(layer, torch.nn.Conv2d):
+            if unpruned_dim0 and unpruned_dim1:
                 unpruned_weights[layer_name] = weights[unpruned_dim0][:, unpruned_dim1, :, :]
-            elif isinstance(layer, torch.nn.Linear):
+            else:
+                print(f"    -> No unpruned channels for {layer_name}")
+                unpruned_weights[layer_name] = torch.empty((0,0))
+        elif isinstance(layer, torch.nn.Linear):
+            weights = layer.weight.detach().cpu()
+            if unpruned_dim0 and unpruned_dim1:
                 unpruned_weights[layer_name] = weights[unpruned_dim0][:, unpruned_dim1]
+            else:
+                unpruned_weights[layer_name] = torch.empty((0,0))
         else:
-            print(f"Layer {layer_name} not found. Skipping.")
+            print(f"    -> Not a Conv2d or Linear, skipping weight extraction for {layer_name}")
             unpruned_weights[layer_name] = None
 
+    # Final debug summary
+    print("\n[DEBUG] Unpruned Info summary:")
+    for ln, info in unpruned_info.items():
+        print(f"  -> {ln}, unpruned_dim0={info['unpruned_dim0']}, unpruned_dim1={info['unpruned_dim1']}")
+    print("\n[DEBUG] num_unpruned_channels:", num_unpruned_channels)
+    
     return unpruned_info, num_unpruned_channels, unpruned_weights
+
 
 
 def extend_channels(model, pruned_dict):

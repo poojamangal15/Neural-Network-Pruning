@@ -57,7 +57,7 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
             continue
 
         group = DG.get_pruning_group(layer_module, prune_fn, idxs=pruning_idxs)
-        # print("group.details()", group.details()) 
+        print("group.details()", group.details()) 
         if DG.check_pruning_group(group):
             groups.append((layer_name, group))
         else:
