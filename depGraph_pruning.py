@@ -10,7 +10,7 @@ from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model
 from utils.plot_utils import plot_metrics
 from utils.device_utils import get_device
-from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info, extend_channels, AlexNet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels
+from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info, extend_channels, AlexNet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, debug_pruning_info 
 
 def prune_model(original_model, model, device, pruning_percentage=0.2):
     pruned_info = {}
@@ -111,6 +111,7 @@ def main():
         model_to_be_pruned = copy.deepcopy(model)
 
          # Count parameters before pruning
+        print("MODEL BEFORE PRUNING:\n", model.model)
         orig_params = count_parameters(model_to_be_pruned)
         print(f"Original number of parameters: {orig_params}")
 
@@ -129,9 +130,12 @@ def main():
 
     
         # Fine-tune the pruned model using the method from DepGraphFineTuner
-        if train_dataloader is not None and val_dataloader is not None:
-            print("Starting post-pruning fine-tuning of the pruned model...")
-            core_model.fine_tune_model(train_dataloader, val_dataloader, epochs=1, learning_rate=1e-5)
+        # if train_dataloader is not None and val_dataloader is not None:
+        #     print("Starting post-pruning fine-tuning of the pruned model...")
+        #     core_model.fine_tune_model(train_dataloader, val_dataloader, epochs=1, learning_rate=1e-5)
+
+        debug_pruning_info(model, core_model, pruned_and_unpruned_info["num_pruned_channels"], pruned_and_unpruned_info["num_unpruned_channels"])
+
 
         new_channels = extend_channels(core_model, pruned_and_unpruned_info["num_pruned_channels"])
         
@@ -145,6 +149,7 @@ def main():
         rebuilt_model = reconstruct_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
         rebuilt_model = freeze_channels(rebuilt_model, pruned_and_unpruned_info["unpruned_info"])
 
+        rebuilt_model = rebuilt_model.to(device).to(torch.float32)
         print(rebuilt_model)
 
         # Fine-tune the pruned model using the method from DepGraphFineTuner
@@ -164,25 +169,26 @@ def main():
         # print(f"Pruned info saved to: {pruned_info_path}")
         
         # Test the pruned model
-        trainer.test(model_to_be_pruned, dataloaders=test_dataloader)
+        print("FINE TUNING COMPLETE")
+        trainer.test(rebuilt_model, dataloaders=test_dataloader)
 
-        pruned_accuracy, pruned_f1 = evaluate_model(model_to_be_pruned, test_dataloader, device)
+        pruned_accuracy, pruned_f1 = evaluate_model(rebuilt_model, test_dataloader, device)
         print(f"Pruned Accuracy: {pruned_accuracy:.4f}, Pruned F1 Score: {pruned_f1:.4f}")
 
         metrics["pruning_percentage"].append(pruning_percentage * 100)
         metrics["test_accuracy"].append(pruned_accuracy)
         metrics["f1_score"].append(pruned_f1)
         metrics["model_size"].append(
-            sum(p.numel() for p in model_to_be_pruned.parameters() if p.requires_grad)
+            sum(p.numel() for p in rebuilt_model.parameters() if p.requires_grad)
         )
 
         print("All Metrics----------->", metrics)
 
-        model_to_be_pruned.zero_grad()
-        model_to_be_pruned.to("cpu")
+        rebuilt_model.zero_grad()
+        rebuilt_model.to("cpu")
         pruned_model_path = f"./pruned_models/alexnet_pruned_{int(pruning_percentage * 100)}.pth"
-        torch.save(model_to_be_pruned.state_dict(), pruned_model_path)
-        torch.save(pruned_info, f"pruned_info_{int(pruning_percentage * 100)}.pt")
+        torch.save(rebuilt_model.state_dict(), pruned_model_path)
+        torch.save(pruned_and_unpruned_info, f"pruned_info_{int(pruning_percentage * 100)}.pt")
 
         print(f"Pruned model saved to: {pruned_model_path}")
 

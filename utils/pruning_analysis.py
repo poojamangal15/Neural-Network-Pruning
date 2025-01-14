@@ -160,6 +160,8 @@ def extend_channels(model, pruned_dict):
 
         if isinstance(module, nn.Conv2d):
             # Handle the first layer (features.0) differently
+            print("name, pruned dict", name, pruned_dict.get(name, (0, 0))[0])
+            print("module.weight" ,module.weight.data.shape[1])
             if name == "features.0":
                 new_in_channel = 3  # Input to the first Conv2d is always 3 (RGB images)
                 new_out_channel = module.weight.data.shape[0] + pruned_dict.get(name, (0, 0))[0]
@@ -225,6 +227,48 @@ class AlexNet_general(nn.Module):
         x = torch.flatten(x, 1)
         x = self.classifier(x)
         return x
+
+    def fine_tune_model(self, train_dataloader, val_dataloader, device, epochs=1, learning_rate=1e-5):
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        criterion = nn.CrossEntropyLoss()
+        self.to(device).to(torch.float32)  # ensure model is float32 on the chosen device
+
+        for epoch in range(epochs):
+            self.train()
+            for batch in train_dataloader:
+                inputs, targets = batch
+                
+                # Move inputs and targets to the same device and dtype
+                inputs = inputs.to(device, dtype=torch.float32)
+                targets = targets.to(device)
+                
+                optimizer.zero_grad()
+                outputs = self(inputs)
+                loss = criterion(outputs, targets)
+                loss.backward()
+                optimizer.step()
+            
+            self.eval()
+            with torch.no_grad():
+                total_loss = 0
+                correct = 0
+                for batch in val_dataloader:
+                    inputs, targets = batch
+                    
+                    # Again, move inputs/targets to correct device & dtype
+                    inputs = inputs.to(device, dtype=torch.float32)
+                    targets = targets.to(device)
+                    
+                    outputs = self(inputs)
+                    total_loss += criterion(outputs, targets).item()
+                    correct += (outputs.argmax(dim=1) == targets).sum().item()
+                
+                val_accuracy = correct / len(val_dataloader.dataset)
+                print(
+                    f"Epoch {epoch + 1}/{epochs}, "
+                    f"Validation Accuracy: {val_accuracy:.4f}, "
+                    f"Loss: {total_loss:.4f}"
+                )
 
 
 # Function to create the pruned AlexNet
@@ -346,3 +390,48 @@ def freeze_channels(model, channel_dict):
             weight.register_hook(lambda grad, mask=combined_mask: freeze_grad_hook(grad, mask))
 
     return model
+
+
+def debug_pruning_info(
+    original_model: torch.nn.Module,
+    pruned_model: torch.nn.Module,
+    pruned_dict: dict,
+    unpruned_dict: dict
+):
+    """
+    Prints out channel dimensions for Conv2d layers in both the original 
+    and pruned model, along with the values from `pruned_dict`.
+    
+    - `pruned_dict` is typically a dict like:
+          {
+              "features.3": (pruned_out, pruned_in),
+              "features.6": (pruned_out, pruned_in),
+              ...
+          }
+      where each tuple indicates how many out-channels and in-channels 
+      were pruned for that layer.
+    """
+    print("========== ORIGINAL MODEL CHANNELS ==========")
+    for name, module in original_model.named_modules():
+        if isinstance(module, torch.nn.Conv2d):
+            print(f"[{name}] out_ch = {module.out_channels}, in_ch = {module.in_channels}")
+    
+    print("\n========== PRUNED MODEL CHANNELS ==========")
+    for name, module in pruned_model.named_modules():
+        if isinstance(module, torch.nn.Conv2d):
+            print(f"[{name}] out_ch = {module.out_channels}, in_ch = {module.in_channels}")
+    
+    print("\n========== PRUNED_DICT CONTENTS ==========")
+    for name, val in pruned_dict.items():
+        # val might be (pruned_out, pruned_in) or something similar
+        # so let's assume that's the format
+        print(f"[{name}] -> pruned_out = {val[0]}, pruned_in = {val[1]}")
+
+    print("\n========== PRUNED_DICT ==========")
+    for name, val in pruned_dict.items():
+        # e.g., val might be (pruned_out, pruned_in) or a dict with indices
+        print(f"[{name}] -> {val}")
+
+    print("\n========== UNPRUNED_DICT ==========")
+    for name, val in unpruned_dict.items():
+        print(f"[{name}] -> {val}")
