@@ -67,8 +67,10 @@ def get_pruned_info(groups, original_model):
                 'pruned_dim1': set()   # in-ch
             }
 
-        for i, item in enumerate(group.items):
-            pruned_indices = item.idxs
+        if group.items:
+            # Access the first Dependency object in group.items
+            first_item = group.items[0]
+            pruned_indices = first_item.idxs
 
             # Verify pruned indices against the layer's weight dimensions
             if pruned_indices:
@@ -76,14 +78,18 @@ def get_pruned_info(groups, original_model):
                     print(f"Error: Pruned indices exceed dimensions for {layer_name}")
                     pruned_indices = [idx for idx in pruned_indices if idx < layer.weight.shape[0]]
 
-            if "out_channels" in str(item):
+            print("First item", first_item)
+            if "out_channels" in str(first_item):
                 pruned_info[layer_name]['pruned_dim0'].update(pruned_indices)
 
-                if "in_channels" in str(item):
-                    pruned_info[layer_name]['pruned_dim1'].update(next_pruned_indices)
-                    next_pruned_indices = pruned_indices
+                # Check for in_channels dependency in subsequent items
+                for subsequent_item in group.items[1:]:
+                    if "in_channels" in str(subsequent_item):
+                        pruned_info[layer_name]['pruned_dim1'].update(next_pruned_indices)
+                        next_pruned_indices = subsequent_item.idxs
+                        break  # No need to check further, as you've found the in_channels dependency
 
-            elif "in_channels" in str(item):
+            elif "in_channels" in str(first_item):
                 pruned_info[layer_name]['pruned_dim1'].update(pruned_indices)
 
     # --------------------------------------------------------------------------
@@ -166,16 +172,21 @@ def get_unpruned_info(groups, original_model):
         pruned_dim1 = []
         
         # print("  [DEBUG] group items:")
-        for i, item in enumerate(group.items):
-            # print(f"    Item {i}: {item}")
-            # item.idxs are the pruned indices for either out_ch or in_ch
-            pruned_indices = item.idxs
-            # print(f"      Indices: {pruned_indices}")
-            
-            if "out_channels" in str(item):
+        if group.items:
+            # Access the first Dependency object in group.items
+            first_item = group.items[0]
+
+            # Get the indices from the first Dependency object
+            pruned_indices = first_item.idxs
+
+            print(f"First occurrence of indices: {pruned_indices}")
+
+            # Check if these are out_channels or in_channels
+            if "out_channels" in str(first_item):
                 pruned_dim0.extend(pruned_indices)
-            elif "in_channels" in str(item):
+            elif "in_channels" in str(first_item):
                 pruned_dim1.extend(pruned_indices)
+
                 
         # Deduplicate in case the same indices appear multiple times
         pruned_dim0 = sorted(set(pruned_dim0))
@@ -187,8 +198,8 @@ def get_unpruned_info(groups, original_model):
         
         # print(f"  [DEBUG] pruned_dim0={pruned_dim0}")
         # print(f"  [DEBUG] pruned_dim1={pruned_dim1}")
-        # print(f"  [DEBUG] unpruned_dim0={unpruned_dim0}")
-        # print(f"  [DEBUG] unpruned_dim1={unpruned_dim1}")
+        print(f"  [DEBUG] unpruned_dim0={unpruned_dim0}")
+        print(f"  [DEBUG] unpruned_dim1={unpruned_dim1}")
         
         unpruned_info[layer_name]['unpruned_dim0'] = unpruned_dim0
         unpruned_info[layer_name]['unpruned_dim1'] = unpruned_dim1
@@ -201,12 +212,6 @@ def get_unpruned_info(groups, original_model):
                 unpruned_weights[layer_name] = weights[unpruned_dim0][:, unpruned_dim1, :, :]
             else:
                 print(f"    -> No unpruned channels for {layer_name}")
-                unpruned_weights[layer_name] = torch.empty((0,0))
-        elif isinstance(layer, torch.nn.Linear):
-            weights = layer.weight.detach().cpu()
-            if unpruned_dim0 and unpruned_dim1:
-                unpruned_weights[layer_name] = weights[unpruned_dim0][:, unpruned_dim1]
-            else:
                 unpruned_weights[layer_name] = torch.empty((0,0))
         else:
             print(f"    -> Not a Conv2d or Linear, skipping weight extraction for {layer_name}")
@@ -507,3 +512,47 @@ def debug_pruning_info(
     print("\n========== UNPRUNED_DICT ==========")
     for name, val in unpruned_dict.items():
         print(f"[{name}] -> {val}")
+
+
+import pytorch_lightning as pl
+import torch.nn as nn
+import torch
+import torch.nn.functional as F
+
+class AlexNetLightningModule(pl.LightningModule):
+    def __init__(self, model, learning_rate=1e-3):
+        super().__init__()
+        self.model = model
+        self.learning_rate = learning_rate
+        self.criterion = nn.CrossEntropyLoss()
+
+    def forward(self, x):
+        return self.model(x)
+
+    def training_step(self, batch, batch_idx):
+        inputs, targets = batch
+        outputs = self(inputs)
+        loss = self.criterion(outputs, targets)
+        self.log("train_loss", loss)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        inputs, targets = batch
+        outputs = self(inputs)
+        loss = self.criterion(outputs, targets)
+        acc = (outputs.argmax(dim=1) == targets).float().mean()
+        self.log("val_loss", loss)
+        self.log("val_acc", acc)
+        return {"val_loss": loss, "val_acc": acc}
+
+    def test_step(self, batch, batch_idx):
+        inputs, targets = batch
+        outputs = self(inputs)
+        loss = self.criterion(outputs, targets)
+        acc = (outputs.argmax(dim=1) == targets).float().mean()
+        self.log("test_loss", loss)
+        self.log("test_acc", acc)
+        return {"test_loss": loss, "test_acc": acc}
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=self.learning_rate)

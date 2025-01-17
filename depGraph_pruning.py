@@ -4,13 +4,14 @@ import copy
 import wandb
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
+import torch.nn as nn
 
 from models.depGraph_fineTuner import DepGraphFineTuner
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model
 from utils.plot_utils import plot_metrics
 from utils.device_utils import get_device
-from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info, extend_channels, AlexNet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, debug_pruning_info 
+from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info, extend_channels, AlexNet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, debug_pruning_info, AlexNetLightningModule
 
 def prune_model(original_model, model, device, pruning_percentage=0.2):
     pruned_info = {}
@@ -104,7 +105,7 @@ def main():
     train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
     pruning_percentages = [0.2]
 
-    trainer = pl.Trainer(max_epochs=1 , logger=wandb_logger, accelerator=device.type)
+    trainer = pl.Trainer(max_epochs=5 , logger=wandb_logger, accelerator=device.type)
 
     for pruning_percentage in pruning_percentages:
         print(f"Applying {pruning_percentage * 100}% pruning...")
@@ -130,11 +131,14 @@ def main():
 
     
         # Fine-tune the pruned model using the method from DepGraphFineTuner
-        # if train_dataloader is not None and val_dataloader is not None:
-        #     print("Starting post-pruning fine-tuning of the pruned model...")
-        #     core_model.fine_tune_model(train_dataloader, val_dataloader, epochs=1, learning_rate=1e-5)
+        if train_dataloader is not None and val_dataloader is not None:
+            print("Starting post-pruning fine-tuning of the pruned model...")
+            core_model.fine_tune_model(train_dataloader, val_dataloader, epochs=5, learning_rate=1e-4)
 
-        debug_pruning_info(model, core_model, pruned_and_unpruned_info["num_pruned_channels"], pruned_and_unpruned_info["num_unpruned_channels"])
+        pruned_accuracy, pruned_f1 = evaluate_model(core_model, test_dataloader, device)
+        print(f"Pruned Accuracy: {pruned_accuracy:.4f}, Pruned F1 Score: {pruned_f1:.4f}")
+
+        # debug_pruning_info(model, core_model, pruned_and_unpruned_info["num_pruned_channels"], pruned_and_unpruned_info["num_unpruned_channels"])
 
 
         new_channels = extend_channels(core_model, pruned_and_unpruned_info["num_pruned_channels"])
@@ -154,8 +158,8 @@ def main():
 
         # Fine-tune the pruned model using the method from DepGraphFineTuner
         if train_dataloader is not None and val_dataloader is not None:
-            print("Starting post-pruning fine-tuning of the pruned model...")
-            rebuilt_model.fine_tune_model(train_dataloader, val_dataloader, epochs=1, learning_rate=1e-5)
+            print("Starting post-rebuilding fine-tuning of the pruned model...")
+            rebuilt_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=5, learning_rate=1e-4)
 
         # # Save the pruned model's state dictionary
         # pruned_model_path = f"./pruned_models/alexnet_pruned_{int(pruning_percentage * 100)}.pth"
@@ -170,10 +174,13 @@ def main():
         
         # Test the pruned model
         print("FINE TUNING COMPLETE")
-        trainer.test(rebuilt_model, dataloaders=test_dataloader)
+        
+        lightning_model = AlexNetLightningModule(rebuilt_model)
+        trainer.test(lightning_model, dataloaders=test_dataloader)
+
 
         pruned_accuracy, pruned_f1 = evaluate_model(rebuilt_model, test_dataloader, device)
-        print(f"Pruned Accuracy: {pruned_accuracy:.4f}, Pruned F1 Score: {pruned_f1:.4f}")
+        print(f"Rebuild Accuracy: {pruned_accuracy:.4f}, Pruned F1 Score: {pruned_f1:.4f}")
 
         metrics["pruning_percentage"].append(pruning_percentage * 100)
         metrics["test_accuracy"].append(pruned_accuracy)
