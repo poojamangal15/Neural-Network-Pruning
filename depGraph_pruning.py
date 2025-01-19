@@ -6,7 +6,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 import torch.nn as nn
 
-from models.depGraph_fineTuner import DepGraphFineTuner
+import torchvision.models as models
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model
 from utils.plot_utils import plot_metrics
@@ -87,13 +87,18 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
     return model, pruned_and_unpruned_info
 
 def main():
-    wandb.init(project='alexnet_depGraph', name='AlexNet_Prune_Run')
+    wandb.init(project='resnet20_depGraph', name='ResNet20_Prune_Run')
     wandb_logger = WandbLogger(log_model=False)
 
     device = get_device()
-    checkpoint_path = "./checkpoints/best_checkpoint.ckpt"
 
-    model = DepGraphFineTuner.load_from_checkpoint(checkpoint_path).to(device)
+    model = torch.hub.load(
+        "chenyaofo/pytorch-cifar-models",
+        "cifar10_resnet20",
+        pretrained=True
+    ).to(device)
+
+    print("LOaded model", model)
 
     metrics = {
         "pruning_percentage": [],
@@ -102,10 +107,10 @@ def main():
         "model_size": []
     }
 
-    train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
+    # train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
     pruning_percentages = [0.2]
 
-    trainer = pl.Trainer(max_epochs=5 , logger=wandb_logger, accelerator=device.type)
+    # trainer = pl.Trainer(max_epochs=5 , logger=wandb_logger, accelerator=device.type)
 
     for pruning_percentage in pruning_percentages:
         print(f"Applying {pruning_percentage * 100}% pruning...")
