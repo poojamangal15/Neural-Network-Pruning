@@ -10,7 +10,7 @@ from models.depGraph_fineTuner import DepGraphFineTuner
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model
 from utils.plot_utils import plot_metrics
-from utils.device_utils import get_device
+from utils.pruning_analysis import get_device
 from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info, extend_channels, AlexNet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, debug_pruning_info, AlexNetLightningModule
 
 def prune_model(original_model, model, device, pruning_percentage=0.2):

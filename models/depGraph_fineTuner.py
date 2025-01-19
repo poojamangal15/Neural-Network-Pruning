@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from .alexNet_fineTuner import AlexNetFineTuner
-from utils.device_utils import get_device
+from utils.pruning_analysis import get_device
 
 class DepGraphFineTuner(AlexNetFineTuner):
     def __init__(self, learning_rate=1e-4, num_classes=10):
