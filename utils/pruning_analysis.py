@@ -2,11 +2,7 @@ import torch
 import torch.nn as nn
 from copy import deepcopy
 from models.depGraph_fineTuner import DepGraphFineTuner
-
-def get_device():
-    return torch.device("mps" if torch.backends.mps.is_available() else 
-                        "cuda" if torch.cuda.is_available() else "cpu")
-                        
+                     
 def count_parameters(model):
     """Counts the number of trainable parameters in the model."""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
