@@ -1,32 +1,33 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.optim.lr_scheduler import StepLR, ExponentialLR, CyclicLR, CosineAnnealingLR
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
-import torch.nn.utils.prune as prune
 import matplotlib.pyplot as plt
 
-# Data from the output
-iterations = [31250000, 62500000, 125000000, 250000000, 500000000, 1000000000, 2000000000]
-execution_times = [0.038078, 0.079033, 0.152449, 0.279447, 0.561927, 1.103204, 2.241537]
+# Data: After Pruning + Fine-Tuning
+pruning_percentage = [20.0, 40.0, 60.0, 80.0]
+acc_after_pruning = [0.7611, 0.7717, 0.7579, 0.7195]
+f1_after_pruning  = [0.7590, 0.7674, 0.7565, 0.7143]
 
-# Create the plot with annotations in millions
-plt.figure(figsize=(10, 6))
-plt.plot(iterations, execution_times, marker='o', linestyle='-', label='Execution Time')
+# Data: After Rebuilding + Fine-Tuning
+acc_after_rebuild = [0.7828, 0.7761, 0.7660, 0.7682]
+f1_after_rebuild  = [0.7811, 0.7764, 0.7647, 0.7687]
 
-# Adding annotations for each point in millions
-for x, y in zip(iterations, execution_times):
-    plt.text(x, y, f'{x//1_000_000}M', fontsize=9, ha='right', va='bottom')
+model_size_after_pruning = [48698799, 40518927, 32506240, 24667405]
+model_size_after_rebuild = [57044810, 57044810, 57044810, 57044810]
 
-# Adding labels and title
-plt.xlabel('Number of Iterations (niter)', fontsize=12)
-plt.ylabel('Execution Time (seconds)', fontsize=12)
-plt.title('Execution Time vs. Number of Iterations', fontsize=14)
-plt.grid(True)
-plt.legend(fontsize=12)
+plt.figure(figsize=(8, 5))
 
-# Show the plot
+bar_width = 0.35
+x = range(len(pruning_percentage))  # for the x-axis positions
+
+# Bar for after pruning
+plt.bar([p - bar_width/2 for p in x], model_size_after_pruning, 
+        width=bar_width, color='orange', label='After Pruning + FT')
+
+# Bar for after rebuilding
+plt.bar([p + bar_width/2 for p in x], model_size_after_rebuild, 
+        width=bar_width, color='cyan', label='After Rebuild + FT')
+
+plt.xticks(x, [f"{int(p)}%" for p in pruning_percentage])  # labeling x-axis with the percentages
+plt.title("Model Size vs. Pruning Percentage")
+plt.ylabel("Number of Parameters")
+plt.legend()
+plt.grid(True, axis='y')
 plt.show()
-

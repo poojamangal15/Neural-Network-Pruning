@@ -99,6 +99,7 @@ def main():
         "pruning_percentage": [],
         "test_accuracy": [],
         "f1_score": [],
+        "count_params": [],
         "model_size": []
     }
 
@@ -141,7 +142,7 @@ def main():
         print(f"Accuracy immediately after pruning: {pruned_accuracy:.4f}, Pruned F1 Score: {pruned_f1:.4f}")
 
         pruned_model_size = model_size_in_mb(core_model)
-        print("Model size in mb", model_size)
+        print("Model size in mb", pruned_model_size)
         # Fine-tune the pruned model using the method from DepGraphFineTuner
         if train_dataloader is not None and val_dataloader is not None:
             print("Starting post-pruning fine-tuning of the pruned model...")
@@ -171,7 +172,7 @@ def main():
         print(f"Accuracy after rebuilding: {rebuild_accuracy:.4f}, Pruned F1 Score: {rebuild_f1:.4f}")
 
         rebuild_model_size = model_size_in_mb(core_model)
-        print("Model size in mb", model_size)
+        print("Model size in mb", rebuild_model_size)
 
         # Fine-tune the pruned model using the method from DepGraphFineTuner
         if train_dataloader is not None and val_dataloader is not None:
