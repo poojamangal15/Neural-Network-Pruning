@@ -56,7 +56,7 @@ def get_pruned_info(groups, original_model):
             print(f"Layer '{layer_name}' not found in original_model. Skipping.")
             continue
 
-        print(f"Processing layer: {layer_name}")
+        # print(f"Processing layer: {layer_name}")
 
         # Initialize the sets for collecting pruned indices
         # used sets since they are a lot of repetitive values causing channel number mismatch
@@ -77,7 +77,7 @@ def get_pruned_info(groups, original_model):
                     print(f"Error: Pruned indices exceed dimensions for {layer_name}")
                     pruned_indices = [idx for idx in pruned_indices if idx < layer.weight.shape[0]]
 
-            print("First item", first_item)
+            # print("First item", first_item)
             if "out_channels" in str(first_item):
                 pruned_info[layer_name]['pruned_dim0'].update(pruned_indices)
 
@@ -137,7 +137,7 @@ def get_unpruned_info(groups, original_model):
     module_dict = dict(original_model.named_modules())
 
     for layer_name, group in groups:
-        print(f"\nDEBUG: Processing group layer_name={layer_name}")
+        # print(f"\nDEBUG: Processing group layer_name={layer_name}")
 
         layer = module_dict.get(layer_name, None)
 
@@ -150,7 +150,7 @@ def get_unpruned_info(groups, original_model):
             print(f"  -> Could not find layer '{layer_name}' in module_dict. Skipping.")
             continue
         
-        print(f"  -> Found layer '{layer_name}' in original_model: {layer}")
+        # print(f"  -> Found layer '{layer_name}' in original_model: {layer}")
 
         # Initialize unpruned_info if this is the first time we see this layer
         if layer_name not in unpruned_info:
@@ -178,7 +178,7 @@ def get_unpruned_info(groups, original_model):
             # Get the indices from the first Dependency object
             pruned_indices = first_item.idxs
 
-            print(f"First occurrence of indices: {pruned_indices}")
+            # print(f"First occurrence of indices: {pruned_indices}")
 
             # Check if these are out_channels or in_channels
             if "out_channels" in str(first_item):
@@ -197,8 +197,8 @@ def get_unpruned_info(groups, original_model):
         
         # print(f"  [DEBUG] pruned_dim0={pruned_dim0}")
         # print(f"  [DEBUG] pruned_dim1={pruned_dim1}")
-        print(f"  [DEBUG] unpruned_dim0={unpruned_dim0}")
-        print(f"  [DEBUG] unpruned_dim1={unpruned_dim1}")
+        # print(f"  [DEBUG] unpruned_dim0={unpruned_dim0}")
+        # print(f"  [DEBUG] unpruned_dim1={unpruned_dim1}")
         
         unpruned_info[layer_name]['unpruned_dim0'] = unpruned_dim0
         unpruned_info[layer_name]['unpruned_dim1'] = unpruned_dim1
@@ -238,12 +238,12 @@ def extend_channels(model, pruned_dict):
 
         if isinstance(module, nn.Conv2d):
             # Handle the first layer (features.0) differently
-            print("name, pruned dict", name, pruned_dict.get(name, (0, 0))[0])
-            print("module.weight" ,module.weight.data.shape[1])
+            # print("name, pruned dict", name, pruned_dict.get(name, (0, 0))[0])
+            # print("module.weight" ,module.weight.data.shape[1])
 
             new_in_channel = module.weight.data.shape[1] + pruned_dict.get(name, (0, 0))[1]
             new_out_channel = module.weight.data.shape[0] + pruned_dict.get(name, (0, 0))[0]
-            print("new in and out channels", new_in_channel, new_out_channel)
+            # print("new in and out channels", new_in_channel, new_out_channel)
 
             new_channel_dict[name] = (int(new_out_channel), int(new_in_channel))
 
