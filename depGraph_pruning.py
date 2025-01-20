@@ -161,8 +161,6 @@ def main():
             print("Starting post-rebuilding fine-tuning of the pruned model...")
             rebuilt_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=5, learning_rate=1e-4)
 
-        print(f"Pruned model saved to: {pruned_model_path}")
-        print(f"Pruned info saved to: {pruned_info_path}")
         
         # Test the pruned model
         print("FINE TUNING COMPLETE")
