@@ -1,5 +1,5 @@
-import torch
 import torch_pruning as tp
+import torch
 import copy
 import wandb
 import pytorch_lightning as pl
@@ -11,7 +11,7 @@ from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model
 from utils.plot_utils import plot_metrics
 from utils.device_utils import get_device
-from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info, extend_channels, AlexNet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, debug_pruning_info, AlexNetLightningModule
+from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info, extend_channels, AlexNet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, debug_pruning_info, AlexNetLightningModule, model_size_in_mb
 
 def prune_model(original_model, model, device, pruning_percentage=0.2):
     pruned_info = {}
@@ -95,7 +95,14 @@ def main():
 
     model = DepGraphFineTuner.load_from_checkpoint(checkpoint_path).to(device)
 
-    metrics = {
+    metrics_pruned = {
+        "pruning_percentage": [],
+        "test_accuracy": [],
+        "f1_score": [],
+        "model_size": []
+    }
+
+    metrics_rebuild = {
         "pruning_percentage": [],
         "test_accuracy": [],
         "f1_score": [],
@@ -107,19 +114,19 @@ def main():
 
     trainer = pl.Trainer(max_epochs=5 , logger=wandb_logger, accelerator=device.type)
 
+# Count parameters before pruning
+    print("MODEL BEFORE PRUNING:\n", model.model)
+    orig_params = count_parameters(model)
+    print(f"Original number of parameters: {orig_params}")
+
+    # Evaluate before pruning
+    orig_accuracy, orig_f1 = evaluate_model(model, test_dataloader, device)
+    print(f"Original Accuracy: {orig_accuracy:.4f}, Original F1 Score: {orig_f1:.4f}")
+    print("Model size in mb", model_size_in_mb(model))
+
     for pruning_percentage in pruning_percentages:
         print(f"Applying {pruning_percentage * 100}% pruning...")
         model_to_be_pruned = copy.deepcopy(model)
-
-         # Count parameters before pruning
-        print("MODEL BEFORE PRUNING:\n", model.model)
-        orig_params = count_parameters(model_to_be_pruned)
-        print(f"Original number of parameters: {orig_params}")
-
-        # Evaluate before pruning
-        orig_accuracy, orig_f1 = evaluate_model(model_to_be_pruned, test_dataloader, device)
-        print(f"Original Accuracy: {orig_accuracy:.4f}, Original F1 Score: {orig_f1:.4f}")
-
         # Prune the model
         core_model, pruned_and_unpruned_info = prune_model(model.model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
         core_model = core_model.to(device)
@@ -129,17 +136,18 @@ def main():
         print(f"Number of parameters after pruning: {pruned_params}")
         print(f"Parameters reduced by: {orig_params - pruned_params} ({((orig_params - pruned_params) / orig_params) * 100:.2f}%)")
 
-    
+        pruned_accuracy, pruned_f1 = evaluate_model(core_model, test_dataloader, device)
+        print(f"Accuracy immediately after pruning: {pruned_accuracy:.4f}, Pruned F1 Score: {pruned_f1:.4f}")
+
         # Fine-tune the pruned model using the method from DepGraphFineTuner
         if train_dataloader is not None and val_dataloader is not None:
             print("Starting post-pruning fine-tuning of the pruned model...")
             core_model.fine_tune_model(train_dataloader, val_dataloader, epochs=5, learning_rate=1e-4)
 
         pruned_accuracy, pruned_f1 = evaluate_model(core_model, test_dataloader, device)
-        print(f"Pruned Accuracy: {pruned_accuracy:.4f}, Pruned F1 Score: {pruned_f1:.4f}")
+        print(f"Accuracy after pruning and fine-tuning: {pruned_accuracy:.4f}, Pruned F1 Score: {pruned_f1:.4f}")
 
         # debug_pruning_info(model, core_model, pruned_and_unpruned_info["num_pruned_channels"], pruned_and_unpruned_info["num_unpruned_channels"])
-
 
         new_channels = extend_channels(core_model, pruned_and_unpruned_info["num_pruned_channels"])
         
@@ -156,6 +164,9 @@ def main():
         rebuilt_model = rebuilt_model.to(device).to(torch.float32)
         print(rebuilt_model)
 
+        rebuild_accuracy, rebuild_f1 = evaluate_model(rebuilt_model, test_dataloader, device)
+        print(f"Accuracy after rebuilding: {rebuild_accuracy:.4f}, Pruned F1 Score: {rebuild_f1:.4f}")
+
         # Fine-tune the pruned model using the method from DepGraphFineTuner
         if train_dataloader is not None and val_dataloader is not None:
             print("Starting post-rebuilding fine-tuning of the pruned model...")
@@ -169,17 +180,26 @@ def main():
         trainer.test(lightning_model, dataloaders=test_dataloader)
 
 
-        pruned_accuracy, pruned_f1 = evaluate_model(rebuilt_model, test_dataloader, device)
-        print(f"Rebuild Accuracy: {pruned_accuracy:.4f}, Pruned F1 Score: {pruned_f1:.4f}")
+        rebuild_accuracy, rebuild_f1 = evaluate_model(rebuilt_model, test_dataloader, device)
+        print(f"Accuracy after rebuilding and fine tuning: {rebuild_accuracy:.4f}, Pruned F1 Score: {rebuild_f1:.4f}")
 
-        metrics["pruning_percentage"].append(pruning_percentage * 100)
-        metrics["test_accuracy"].append(pruned_accuracy)
-        metrics["f1_score"].append(pruned_f1)
-        metrics["model_size"].append(
+        metrics_pruned["pruning_percentage"].append(pruning_percentage * 100)
+        metrics_pruned["test_accuracy"].append(pruned_accuracy)
+        metrics_pruned["f1_score"].append(pruned_f1)
+        metrics_pruned["model_size"].append(
+            sum(p.numel() for p in core_model.parameters() if p.requires_grad)
+        )
+
+
+        metrics_rebuild["pruning_percentage"].append(pruning_percentage * 100)
+        metrics_rebuild["test_accuracy"].append(rebuild_accuracy)
+        metrics_rebuild["f1_score"].append(rebuild_f1)
+        metrics_rebuild["model_size"].append(
             sum(p.numel() for p in rebuilt_model.parameters() if p.requires_grad)
         )
 
-        print("All Metrics----------->", metrics)
+        print("All Metrics----------->", metrics_pruned)
+        print("All Metrics----------->", metrics_rebuild)
 
         rebuilt_model.zero_grad()
         rebuilt_model.to("cpu")

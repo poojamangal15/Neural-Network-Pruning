@@ -1,18 +1,12 @@
 import torch
 import torch.nn as nn
+import os
 from copy import deepcopy
 from models.depGraph_fineTuner import DepGraphFineTuner
                      
 def count_parameters(model):
     """Counts the number of trainable parameters in the model."""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-
-def profile_model_during_training(model, input_size):
-    flops, macs, params = get_model_profile(model=model, input_shape=input_size, print_profile=True, as_string=False)
-    size_mb = model_size_in_mb(model)
-    print(f"Params: {params / 1e6:.3f} M, MACs: {macs / 1e9:.3f} GMACs, FLOPs: {flops / 1e9:.3f} GFLOPs, Size: {size_mb:.2f} MB")
-    return params, macs, size_mb
 
 def model_size_in_mb(model):
     torch.save(model.state_dict(), "temp.p")

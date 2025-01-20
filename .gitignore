@@ -19,6 +19,7 @@ depGraph/data/
 *.pth
 *.tar.gz
 cifar-10-batches-py/
+temp.p
 
 # Ignore Git temporary files
 .git/objects/
