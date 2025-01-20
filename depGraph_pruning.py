@@ -189,7 +189,7 @@ def main():
         # torch.save(rebuilt_model.state_dict(), pruned_model_path)
         # torch.save(pruned_and_unpruned_info, f"pruned_info_{int(pruning_percentage * 100)}.pt")
 
-        print(f"Pruned model saved to: {pruned_model_path}")
+        # print(f"Pruned model saved to: {pruned_model_path}")
 
     # plot_metrics(metrics)
     wandb.finish()
