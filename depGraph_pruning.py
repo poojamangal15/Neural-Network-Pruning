@@ -7,11 +7,46 @@ from pytorch_lightning.loggers import WandbLogger
 import torch.nn as nn
 
 import torchvision.models as models
+from torchvision.datasets import CIFAR10
+from torchvision import datasets, transforms
+from torchvision.transforms import Compose, Resize, ToTensor, Normalize, RandomHorizontalFlip, RandomRotation, ColorJitter
+from torch.utils.data import random_split, DataLoader
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model
 from utils.plot_utils import plot_metrics
-from utils.pruning_analysis import get_device
-from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info, extend_channels, AlexNet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, debug_pruning_info, AlexNetLightningModule
+from utils.device_utils import get_device
+from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info, extend_channels, fine_tuner, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, debug_pruning_info, ResNet_general
+
+
+train_transform = Compose([
+        Resize((224, 224)),
+        RandomHorizontalFlip(p=0.5),
+        RandomRotation(degrees=15),
+        ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+        ToTensor(),
+        Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+# Data transformations for validation/test
+test_transform = Compose([
+    Resize((224, 224)),
+    ToTensor(),
+    Normalize(mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225])
+])
+
+train_dataset = CIFAR10(root='./data', train=True, download=True, transform=train_transform)
+test_dataset = CIFAR10(root='./data', train=False, download=True, transform=test_transform)
+
+# Split the train dataset into train/val
+train_size = int((1 - 0.2) * len(train_dataset))
+val_size = len(train_dataset) - train_size
+train_dataset, val_dataset = random_split(train_dataset, [train_size, val_size])
+
+train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4)
+val_dataloader = DataLoader(val_dataset, batch_size=32, num_workers=4)
+test_dataloader = DataLoader(test_dataset, batch_size=32, num_workers=4)
+
 
 def prune_model(original_model, model, device, pruning_percentage=0.2):
     pruned_info = {}
@@ -19,15 +54,28 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
     model = model.to(device)
     example_inputs = torch.randn(1, 3, 224, 224, dtype=torch.float32, device=device)
 
-    # print("MODEL BEFORE PRUNING:\n", model.model)
-
-    DG = tp.DependencyGraph().build_dependency(model.model, example_inputs)
+    DG = tp.DependencyGraph().build_dependency(model, example_inputs)
     layers_to_prune = {
-        "model.features.3": model.model.features[3],
-        "model.features.6": model.model.features[6],
-        "model.features.8": model.model.features[8],
-        "model.features.10": model.model.features[10],
+        "layer1.0.conv1": model.layer1[0].conv1,
+        "layer1.0.conv2": model.layer1[0].conv2,
+        "layer1.1.conv1": model.layer1[1].conv1,
+        "layer1.1.conv2": model.layer1[1].conv2,
+        "layer1.2.conv1": model.layer1[2].conv1,
+        "layer1.2.conv2": model.layer1[2].conv2,
+        "layer2.0.conv1": model.layer2[0].conv1,
+        "layer2.0.conv2": model.layer2[0].conv2,
+        "layer2.1.conv1": model.layer2[1].conv1,
+        "layer2.1.conv2": model.layer2[1].conv2,
+        "layer2.2.conv1": model.layer2[2].conv1,
+        "layer2.2.conv2": model.layer2[2].conv2,
+        "layer3.0.conv1": model.layer3[0].conv1,
+        "layer3.0.conv2": model.layer3[0].conv2,
+        "layer3.1.conv1": model.layer3[1].conv1,
+        "layer3.1.conv2": model.layer3[1].conv2,
+        "layer3.2.conv1": model.layer3[2].conv1,
+        "layer3.2.conv2": model.layer3[2].conv2,
     }
+
 
 
     def get_pruning_indices(module, percentage):
@@ -70,7 +118,7 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
             print(f"Pruning layer: {layer_name}")
             group.prune()
 
-        print("MODEL AFTER PRUNING:\n", model.model)
+        print("MODEL AFTER PRUNING:\n", model)
     else:
         print("No valid pruning groups found. The model was not pruned.")
 
@@ -98,8 +146,6 @@ def main():
         pretrained=True
     ).to(device)
 
-    print("LOaded model", model)
-
     metrics = {
         "pruning_percentage": [],
         "test_accuracy": [],
@@ -107,17 +153,16 @@ def main():
         "model_size": []
     }
 
-    # train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
     pruning_percentages = [0.2]
 
-    # trainer = pl.Trainer(max_epochs=5 , logger=wandb_logger, accelerator=device.type)
+    trainer = pl.Trainer(max_epochs=5 , logger=wandb_logger, accelerator=device.type)
 
     for pruning_percentage in pruning_percentages:
         print(f"Applying {pruning_percentage * 100}% pruning...")
         model_to_be_pruned = copy.deepcopy(model)
 
          # Count parameters before pruning
-        print("MODEL BEFORE PRUNING:\n", model.model)
+        print("MODEL BEFORE PRUNING:\n", model)
         orig_params = count_parameters(model_to_be_pruned)
         print(f"Original number of parameters: {orig_params}")
 
@@ -126,7 +171,7 @@ def main():
         print(f"Original Accuracy: {orig_accuracy:.4f}, Original F1 Score: {orig_f1:.4f}")
 
         # Prune the model
-        core_model, pruned_and_unpruned_info = prune_model(model.model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
+        core_model, pruned_and_unpruned_info = prune_model(model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
         core_model = core_model.to(device)
 
         # Count parameters after pruning
@@ -138,7 +183,8 @@ def main():
         # Fine-tune the pruned model using the method from DepGraphFineTuner
         if train_dataloader is not None and val_dataloader is not None:
             print("Starting post-pruning fine-tuning of the pruned model...")
-            core_model.fine_tune_model(train_dataloader, val_dataloader, epochs=5, learning_rate=1e-4)
+            scheduler_type = 'step'
+            fine_tuner(core_model, train_dataloader, val_dataloader, scheduler_type, device, num_epochs=5, LR=1e-3)
 
         pruned_accuracy, pruned_f1 = evaluate_model(core_model, test_dataloader, device)
         print(f"Pruned Accuracy: {pruned_accuracy:.4f}, Pruned F1 Score: {pruned_f1:.4f}")
@@ -148,7 +194,7 @@ def main():
 
         new_channels = extend_channels(core_model, pruned_and_unpruned_info["num_pruned_channels"])
         
-        last_conv_out_features, last_conv_shape = calculate_last_conv_out_features(model.model)
+        last_conv_out_features, last_conv_shape = calculate_last_conv_out_features(model)
         print(f"Last Conv Out Features: {last_conv_out_features}")
         print(f"Last Conv Shape: {last_conv_shape}")
 
@@ -165,17 +211,6 @@ def main():
         if train_dataloader is not None and val_dataloader is not None:
             print("Starting post-rebuilding fine-tuning of the pruned model...")
             rebuilt_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=5, learning_rate=1e-4)
-
-        # # Save the pruned model's state dictionary
-        # pruned_model_path = f"./pruned_models/alexnet_pruned_{int(pruning_percentage * 100)}.pth"
-        # torch.save(model_to_be_pruned.state_dict(), pruned_model_path)
-
-        # # Save the pruned_info dictionary
-        # pruned_info_path = f"./pruned_models/pruned_info_{int(pruning_percentage * 100)}.pt"
-        # torch.save(pruned_info, pruned_info_path)
-
-        # print(f"Pruned model saved to: {pruned_model_path}")
-        # print(f"Pruned info saved to: {pruned_info_path}")
         
         # Test the pruned model
         print("FINE TUNING COMPLETE")

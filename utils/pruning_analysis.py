@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 from copy import deepcopy
 from models.depGraph_fineTuner import DepGraphFineTuner
+import torch.optim as optim
+from torch.optim.lr_scheduler import StepLR, ExponentialLR, CyclicLR, CosineAnnealingLR
 
 def get_device():
     return torch.device("mps" if torch.backends.mps.is_available() else 
@@ -60,7 +62,7 @@ def get_pruned_info(groups, original_model):
             print(f"Layer '{layer_name}' not found in original_model. Skipping.")
             continue
 
-        print(f"Processing layer: {layer_name}")
+        # print(f"Processing layer: {layer_name}")
 
         # Initialize the sets for collecting pruned indices
         # used sets since they are a lot of repetitive values causing channel number mismatch
@@ -81,7 +83,6 @@ def get_pruned_info(groups, original_model):
                     print(f"Error: Pruned indices exceed dimensions for {layer_name}")
                     pruned_indices = [idx for idx in pruned_indices if idx < layer.weight.shape[0]]
 
-            print("First item", first_item)
             if "out_channels" in str(first_item):
                 pruned_info[layer_name]['pruned_dim0'].update(pruned_indices)
 
@@ -141,7 +142,7 @@ def get_unpruned_info(groups, original_model):
     module_dict = dict(original_model.named_modules())
 
     for layer_name, group in groups:
-        print(f"\nDEBUG: Processing group layer_name={layer_name}")
+        # print(f"\nDEBUG: Processing group layer_name={layer_name}")
 
         layer = module_dict.get(layer_name, None)
 
@@ -154,7 +155,7 @@ def get_unpruned_info(groups, original_model):
             print(f"  -> Could not find layer '{layer_name}' in module_dict. Skipping.")
             continue
         
-        print(f"  -> Found layer '{layer_name}' in original_model: {layer}")
+        # print(f"  -> Found layer '{layer_name}' in original_model: {layer}")
 
         # Initialize unpruned_info if this is the first time we see this layer
         if layer_name not in unpruned_info:
@@ -182,7 +183,7 @@ def get_unpruned_info(groups, original_model):
             # Get the indices from the first Dependency object
             pruned_indices = first_item.idxs
 
-            print(f"First occurrence of indices: {pruned_indices}")
+            # print(f"First occurrence of indices: {pruned_indices}")
 
             # Check if these are out_channels or in_channels
             if "out_channels" in str(first_item):
@@ -201,8 +202,8 @@ def get_unpruned_info(groups, original_model):
         
         # print(f"  [DEBUG] pruned_dim0={pruned_dim0}")
         # print(f"  [DEBUG] pruned_dim1={pruned_dim1}")
-        print(f"  [DEBUG] unpruned_dim0={unpruned_dim0}")
-        print(f"  [DEBUG] unpruned_dim1={unpruned_dim1}")
+        # print(f"  [DEBUG] unpruned_dim0={unpruned_dim0}")
+        # print(f"  [DEBUG] unpruned_dim1={unpruned_dim1}")
         
         unpruned_info[layer_name]['unpruned_dim0'] = unpruned_dim0
         unpruned_info[layer_name]['unpruned_dim1'] = unpruned_dim1
@@ -242,12 +243,12 @@ def extend_channels(model, pruned_dict):
 
         if isinstance(module, nn.Conv2d):
             # Handle the first layer (features.0) differently
-            print("name, pruned dict", name, pruned_dict.get(name, (0, 0))[0])
-            print("module.weight" ,module.weight.data.shape[1])
+            # print("name, pruned dict", name, pruned_dict.get(name, (0, 0))[0])
+            # print("module.weight" ,module.weight.data.shape[1])
 
             new_in_channel = module.weight.data.shape[1] + pruned_dict.get(name, (0, 0))[1]
             new_out_channel = module.weight.data.shape[0] + pruned_dict.get(name, (0, 0))[0]
-            print("new in and out channels", new_in_channel, new_out_channel)
+            # print("new in and out channels", new_in_channel, new_out_channel)
 
             new_channel_dict[name] = (int(new_out_channel), int(new_in_channel))
 
@@ -260,106 +261,150 @@ def get_core_weights(pruned_model, unpruned_weights):
         if isinstance(module, nn.Conv2d):
             unpruned_weights[name] = module.weight.data
 
-class AlexNet_general(nn.Module):
-    def __init__(self, channel_dict, last_conv_out_features):
-        super(AlexNet_general, self).__init__()
-        
-        # Define features (Convolutional layers only)
-        self.features = nn.Sequential(
-            nn.Conv2d(channel_dict['features.0'][1], channel_dict['features.0'][0], kernel_size=11, stride=4, padding=2),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2),
-            
-            nn.Conv2d(channel_dict['features.3'][1], channel_dict['features.3'][0], kernel_size=5, padding=2),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2),
-            
-            nn.Conv2d(channel_dict['features.6'][1], channel_dict['features.6'][0], kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            
-            nn.Conv2d(channel_dict['features.8'][1], channel_dict['features.8'][0], kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            
-            nn.Conv2d(channel_dict['features.10'][1], channel_dict['features.10'][0], kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2),
-        )
-        
-        # Adaptive average pooling
-        self.avgpool = nn.AdaptiveAvgPool2d((6, 6))
-        
-        # Classifier
-        self.classifier = nn.Sequential(
-            nn.Linear(last_conv_out_features, 4096),  # Adapted `in_features`
-            nn.ReLU(inplace=True),
-            nn.Dropout(),
-            
-            nn.Linear(4096, 4096),
-            nn.ReLU(inplace=True),
-            nn.Dropout(),
-            
-            nn.Linear(4096, 10),  # Output layer (10 classes)
-        )
+def fine_tuner(model, train_loader, val_loader, scheduler_type, device, num_epochs, LR=1e-3):
+
+    model = model.to(device)
+
+    # Define loss function and optimizer
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=LR)
     
-    def forward(self, x):
-        x = self.features(x)
-        x = self.avgpool(x)
-        x = torch.flatten(x, 1)
-        x = self.classifier(x)
-        return x
+    # Define LR scheduler
+    if scheduler_type == 'step':
+        scheduler = StepLR(optimizer, step_size=50, gamma=0.1)
+    elif scheduler_type == 'exponential':
+        scheduler = ExponentialLR(optimizer, gamma=0.95)
+    elif scheduler_type == 'cyclic':
+        scheduler = CyclicLR(optimizer, base_lr=1e-5, max_lr=0.01, step_size_up=20, mode='triangular2')
+    else:
+        scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=1e-5)
+        
 
-    def fine_tune_model(self, train_dataloader, val_dataloader, device, epochs=1, learning_rate=1e-5):
-        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
-        criterion = nn.CrossEntropyLoss()
-        self.to(device).to(torch.float32)  # ensure model is float32 on the chosen device
+    train_losses = []
+    train_accuracies = []
+    val_losses = []
+    val_accuracies = []
+    lrs = []  # To track learning rates
 
-        for epoch in range(epochs):
-            self.train()
-            for batch in train_dataloader:
-                inputs, targets = batch
-                
-                # Move inputs and targets to the same device and dtype
-                inputs = inputs.to(device, dtype=torch.float32)
-                targets = targets.to(device)
-                
-                optimizer.zero_grad()
-                outputs = self(inputs)
-                loss = criterion(outputs, targets)
-                loss.backward()
-                optimizer.step()
+    # Fine-tuning loop
+    for epoch in range(num_epochs):
+        model.train()
+        train_loss = 0.0
+        correct = 0
+        total = 0
+        for inputs, labels in train_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
             
-            self.eval()
-            with torch.no_grad():
-                total_loss = 0
-                correct = 0
-                for batch in val_dataloader:
-                    inputs, targets = batch
-                    
-                    # Again, move inputs/targets to correct device & dtype
-                    inputs = inputs.to(device, dtype=torch.float32)
-                    targets = targets.to(device)
-                    
-                    outputs = self(inputs)
-                    total_loss += criterion(outputs, targets).item()
-                    correct += (outputs.argmax(dim=1) == targets).sum().item()
-                
-                val_accuracy = correct / len(val_dataloader.dataset)
-                print(
-                    f"Epoch {epoch + 1}/{epochs}, "
-                    f"Validation Accuracy: {val_accuracy:.4f}, "
-                    f"Loss: {total_loss:.4f}"
-                )
+            optimizer.zero_grad()
+            
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            
+            loss.backward()
+            optimizer.step()
+            
+            train_loss += loss.item() * inputs.size(0)
+            _, predicted = torch.max(outputs, 1)
+            correct += (predicted == labels).sum().item()
+            total += labels.size(0)
+
+        # Calculate average loss and accuracy for the epoch
+        epoch_loss = train_loss / len(train_loader.dataset)
+        epoch_accuracy = correct / total
+        train_losses.append(epoch_loss)
+        train_accuracies.append(epoch_accuracy)
+        
+        # Step the scheduler and track learning rate
+        scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
+        lrs.append(current_lr)
+        
+        # Validation loop
+        model.eval()
+        val_loss = 0
+        correct = 0
+        total = 0
+
+        with torch.no_grad():
+            for images, labels in val_loader:
+                images, labels = images.to(device), labels.to(device)
+
+                # Forward pass
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+
+                # Accumulate validation metrics
+                val_loss += loss.item() * images.size(0)
+                _, predicted = outputs.max(1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+
+        val_loss /= total
+        val_accuracy = correct / total
+        val_losses.append(val_loss)
+        val_accuracies.append(val_accuracy)
+        
+        print(f"Epoch [{epoch+1}/{num_epochs}], "f"Train Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_accuracy:.4f}, Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy:.2f}, Learning Rate: {current_lr:.6f}")
+    
+    del optimizer
+           
+    print("Fine-Tuning Complete")   
+
+class ResNet_general(nn.Module):
+    def __init__(self, block, num_blocks, channel_dict):
+        super(ResNet_general, self).__init__()
+        
+        self.in_channels = channel_dict['conv1'][0]
+        self.conv1 = nn.Conv2d(channel_dict['conv1'][1], channel_dict['conv1'][0], kernel_size=3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(channel_dict['conv1'][0])
+        self.layer1 = self._make_layer(block, channel_dict['layer1.0.conv1'][0], num_blocks[0])
+        self.layer2 = self._make_layer(block, channel_dict['layer2.0.conv1'][0], num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, channel_dict['layer3.0.conv1'][0], num_blocks[2], stride=2)
+        self.fc = nn.Linear(channel_dict['layer3.2.conv2'][0], 10)
+
+    def _make_layer(self, block, out_channels, blocks, stride=1):
+        layers = []
+        layers.append(block(self.in_channels, out_channels))
+        self.in_channels = out_channels
+        for _ in range(1, blocks):
+            layers.append(block(out_channels, out_channels))
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = F.adaptive_avg_pool2d(out,(1, 1))
+        out = out.view(out.size(0), -1)
+        out = self.fc(out)
+        return out
+
+class BasicBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(BasicBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+        self.downsample = nn.Sequential()
+        if in_channels != out_channels:
+            self.downsample = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += self.downsample(x)
+        out = F.relu(out)
+        return out
 
 
-# Function to create the pruned AlexNet
-def AlexNet_General(channel_dict, last_conv_shape):
-    """
-    - channel_dict: Dictionary with input and output channels for Conv2d layers.
-    - last_conv_shape: Tuple containing (out_channels, height, width) of the last Conv2d layer.
-    """
-    # Calculate the input features for the first linear layer
-    last_conv_out_features = last_conv_shape[0] * last_conv_shape[1] * last_conv_shape[2]
-    return AlexNet_general(channel_dict, last_conv_out_features)
+def Resnet_General(channel_dict):
+    return ResNet_general(BasicBlock, [3,3,3], channel_dict)
 
 def calculate_last_conv_out_features(pruned_model, input_size=(1, 3, 224, 224)):
     """
