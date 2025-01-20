@@ -106,6 +106,7 @@ def main():
         "pruning_percentage": [],
         "test_accuracy": [],
         "f1_score": [],
+        "count_params": [],
         "model_size": []
     }
 
@@ -139,6 +140,8 @@ def main():
         pruned_accuracy, pruned_f1 = evaluate_model(core_model, test_dataloader, device)
         print(f"Accuracy immediately after pruning: {pruned_accuracy:.4f}, Pruned F1 Score: {pruned_f1:.4f}")
 
+        pruned_model_size = model_size_in_mb(core_model)
+        print("Model size in mb", model_size)
         # Fine-tune the pruned model using the method from DepGraphFineTuner
         if train_dataloader is not None and val_dataloader is not None:
             print("Starting post-pruning fine-tuning of the pruned model...")
@@ -167,6 +170,9 @@ def main():
         rebuild_accuracy, rebuild_f1 = evaluate_model(rebuilt_model, test_dataloader, device)
         print(f"Accuracy after rebuilding: {rebuild_accuracy:.4f}, Pruned F1 Score: {rebuild_f1:.4f}")
 
+        rebuild_model_size = model_size_in_mb(core_model)
+        print("Model size in mb", model_size)
+
         # Fine-tune the pruned model using the method from DepGraphFineTuner
         if train_dataloader is not None and val_dataloader is not None:
             print("Starting post-rebuilding fine-tuning of the pruned model...")
@@ -186,17 +192,20 @@ def main():
         metrics_pruned["pruning_percentage"].append(pruning_percentage * 100)
         metrics_pruned["test_accuracy"].append(pruned_accuracy)
         metrics_pruned["f1_score"].append(pruned_f1)
-        metrics_pruned["model_size"].append(
+        metrics_pruned["count_params"].append(
             sum(p.numel() for p in core_model.parameters() if p.requires_grad)
         )
+        metrics_pruned['model_size'].append(pruned_model_size)
 
 
         metrics_rebuild["pruning_percentage"].append(pruning_percentage * 100)
         metrics_rebuild["test_accuracy"].append(rebuild_accuracy)
         metrics_rebuild["f1_score"].append(rebuild_f1)
-        metrics_rebuild["model_size"].append(
+        metrics_rebuild["count_params"].append(
             sum(p.numel() for p in rebuilt_model.parameters() if p.requires_grad)
         )
+        metrics_rebuild['model_size'].append(rebuild_model_size)
+
 
         print("All Metrics----------->", metrics_pruned)
         print("All Metrics----------->", metrics_rebuild)
