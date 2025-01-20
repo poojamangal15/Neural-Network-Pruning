@@ -161,16 +161,8 @@ def main():
             print("Starting post-rebuilding fine-tuning of the pruned model...")
             rebuilt_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=5, learning_rate=1e-4)
 
-        # # Save the pruned model's state dictionary
-        # pruned_model_path = f"./pruned_models/alexnet_pruned_{int(pruning_percentage * 100)}.pth"
-        # torch.save(model_to_be_pruned.state_dict(), pruned_model_path)
-
-        # # Save the pruned_info dictionary
-        # pruned_info_path = f"./pruned_models/pruned_info_{int(pruning_percentage * 100)}.pt"
-        # torch.save(pruned_info, pruned_info_path)
-
-        # print(f"Pruned model saved to: {pruned_model_path}")
-        # print(f"Pruned info saved to: {pruned_info_path}")
+        print(f"Pruned model saved to: {pruned_model_path}")
+        print(f"Pruned info saved to: {pruned_info_path}")
         
         # Test the pruned model
         print("FINE TUNING COMPLETE")
@@ -193,13 +185,13 @@ def main():
 
         rebuilt_model.zero_grad()
         rebuilt_model.to("cpu")
-        pruned_model_path = f"./pruned_models/alexnet_pruned_{int(pruning_percentage * 100)}.pth"
-        torch.save(rebuilt_model.state_dict(), pruned_model_path)
-        torch.save(pruned_and_unpruned_info, f"pruned_info_{int(pruning_percentage * 100)}.pt")
+        # pruned_model_path = f"./pruned_models/alexnet_pruned_{int(pruning_percentage * 100)}.pth"
+        # torch.save(rebuilt_model.state_dict(), pruned_model_path)
+        # torch.save(pruned_and_unpruned_info, f"pruned_info_{int(pruning_percentage * 100)}.pt")
 
         print(f"Pruned model saved to: {pruned_model_path}")
 
-    plot_metrics(metrics)
+    # plot_metrics(metrics)
     wandb.finish()
 
 if __name__ == "__main__":
