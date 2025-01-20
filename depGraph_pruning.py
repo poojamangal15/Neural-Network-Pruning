@@ -103,7 +103,7 @@ def main():
     }
 
     train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
-    pruning_percentages = [0.2]
+    pruning_percentages = [0.2, 0.4, 0.6, 0.8]
 
     trainer = pl.Trainer(max_epochs=5 , logger=wandb_logger, accelerator=device.type)
 
