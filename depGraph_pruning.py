@@ -91,7 +91,7 @@ def main():
     wandb_logger = WandbLogger(log_model=False)
 
     device = get_device()
-    checkpoint_path = "./checkpoints/best_checkpoint.ckpt"
+    checkpoint_path = "./checkpoints/best_checkpoint_preTrained.ckpt"
 
     model = DepGraphFineTuner.load_from_checkpoint(checkpoint_path).to(device)
 
