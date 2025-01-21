@@ -23,5 +23,5 @@ source venv/bin/activate
 cd $SLURM_SUBMIT_DIR
 
 # Run your script
-# python train.py
-python depGraph_pruning.py
+python train.py
+# python depGraph_pruning.py
