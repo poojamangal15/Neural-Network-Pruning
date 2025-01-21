@@ -36,7 +36,7 @@ def load_cifar10_with_alexnet_transforms(data_dir, batch_size, val_split=0.2):
 
 def main():
     # Initialize Wandb
-    wandb.init(project="alexnet_cifar10", name="Pretrained_AlexNet_CIFAR10")
+    wandb.init(project="alexnet_cifar10", name="Pretrained_alexNet_epoch200")
     wandb_logger = WandbLogger(log_model=False)
 
     # Load CIFAR-10 dataset
@@ -48,7 +48,7 @@ def main():
     model = AlexNetFineTuner(learning_rate=1e-5, num_classes=10, freeze_features=False)
 
     # Callbacks
-    early_stopping = EarlyStopping(monitor='val_loss', patience=3, mode='min', verbose=True)
+    early_stopping = EarlyStopping(monitor='val_loss', patience=5, mode='min', verbose=True)
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
         dirpath='checkpoints/',
@@ -59,7 +59,7 @@ def main():
 
     # Trainer
     trainer = pl.Trainer(
-        max_epochs=10,
+        max_epochs=200,
         logger=wandb_logger,
         callbacks=[checkpoint_callback, early_stopping],
         log_every_n_steps=10
