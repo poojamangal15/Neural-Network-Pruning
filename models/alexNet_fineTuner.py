@@ -1,20 +1,25 @@
-import torch
+from torchvision import models
+import pytorch_lightning as pl
 import torch.nn as nn
 import torch.nn.functional as F
-import pytorch_lightning as pl
-from torchvision import models
 from torch.optim import AdamW, lr_scheduler
+import torch
 
 class AlexNetFineTuner(pl.LightningModule):
-    def __init__(self, learning_rate=1e-4, num_classes=10):
+    def __init__(self, learning_rate=1e-5, num_classes=10, freeze_features=False):
         super(AlexNetFineTuner, self).__init__()
         self.save_hyperparameters()
-    
-        # Load pre-trained AlexNet (set pretrained=True if you need ImageNet weights)
-        self.model = models.alexnet(pretrained=False)
+
+        # Load ImageNet-pretrained AlexNet
+        self.model = models.alexnet(pretrained=True)
+
+        # Modify the classifier for CIFAR-10 (10 classes)
         self.model.classifier[6] = nn.Linear(4096, num_classes)
 
-        self.test_outputs = []
+        # Optionally freeze feature extractor
+        if freeze_features:
+            for param in self.model.features.parameters():
+                param.requires_grad = False
 
     def forward(self, x):
         return self.model(x)
@@ -45,10 +50,8 @@ class AlexNetFineTuner(pl.LightningModule):
         test_loss = F.cross_entropy(outputs, labels)
         preds = torch.argmax(outputs, dim=1)
         test_acc = (preds == labels).float().mean()
-
-        self.test_outputs.append({"test_loss": test_loss.item(), "test_acc": test_acc.item()})
-        self.log("test_loss_batch", test_loss, prog_bar=True)
-        self.log("test_acc_batch", test_acc, prog_bar=True)
+        self.log("test_loss", test_loss, prog_bar=True)
+        self.log("test_acc", test_acc, prog_bar=True)
         return test_loss
 
     def on_test_epoch_end(self):
@@ -62,3 +65,6 @@ class AlexNetFineTuner(pl.LightningModule):
         optimizer = AdamW(self.parameters(), lr=self.hparams.learning_rate)
         scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=2)
         return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "monitor": "val_loss"}}
+
+
+   
