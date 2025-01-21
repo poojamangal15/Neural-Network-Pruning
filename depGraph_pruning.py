@@ -171,7 +171,7 @@ def main():
         rebuild_accuracy, rebuild_f1 = evaluate_model(rebuilt_model, test_dataloader, device)
         print(f"Accuracy after rebuilding: {rebuild_accuracy:.4f}, Pruned F1 Score: {rebuild_f1:.4f}")
 
-        rebuild_model_size = model_size_in_mb(core_model)
+        rebuild_model_size = model_size_in_mb(rebuilt_model)
         print("Model size in mb", rebuild_model_size)
 
         # Fine-tune the pruned model using the method from DepGraphFineTuner
