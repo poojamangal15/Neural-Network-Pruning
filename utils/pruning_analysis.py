@@ -380,6 +380,9 @@ class ResNet_general(nn.Module):
         out = self.fc(out)
         return out
 
+def Resnet_General(channel_dict):
+        return ResNet_general(BasicBlock, [3,3,3], channel_dict)
+            
 class BasicBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(BasicBlock, self).__init__()
@@ -403,8 +406,7 @@ class BasicBlock(nn.Module):
         return out
 
 
-def Resnet_General(channel_dict):
-    return ResNet_general(BasicBlock, [3,3,3], channel_dict)
+    
 
 def calculate_last_conv_out_features(pruned_model, input_size=(1, 3, 224, 224)):
     """

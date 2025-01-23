@@ -15,7 +15,7 @@ from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model
 from utils.plot_utils import plot_metrics
 from utils.device_utils import get_device
-from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info, extend_channels, fine_tuner, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, debug_pruning_info, ResNet_general
+from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info, extend_channels, fine_tuner, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, debug_pruning_info, Resnet_General
 
 
 train_transform = Compose([
@@ -184,21 +184,21 @@ def main():
         if train_dataloader is not None and val_dataloader is not None:
             print("Starting post-pruning fine-tuning of the pruned model...")
             scheduler_type = 'step'
-            fine_tuner(core_model, train_dataloader, val_dataloader, scheduler_type, device, num_epochs=5, LR=1e-3)
+            # fine_tuner(core_model, train_dataloader, val_dataloader, scheduler_type, device, num_epochs=5, LR=1e-3)
 
         pruned_accuracy, pruned_f1 = evaluate_model(core_model, test_dataloader, device)
         print(f"Pruned Accuracy: {pruned_accuracy:.4f}, Pruned F1 Score: {pruned_f1:.4f}")
 
-        # debug_pruning_info(model, core_model, pruned_and_unpruned_info["num_pruned_channels"], pruned_and_unpruned_info["num_unpruned_channels"])
+        debug_pruning_info(model, core_model, pruned_and_unpruned_info["num_pruned_channels"], pruned_and_unpruned_info["num_unpruned_channels"])
 
 
         new_channels = extend_channels(core_model, pruned_and_unpruned_info["num_pruned_channels"])
         
-        last_conv_out_features, last_conv_shape = calculate_last_conv_out_features(model)
-        print(f"Last Conv Out Features: {last_conv_out_features}")
-        print(f"Last Conv Shape: {last_conv_shape}")
+        # last_conv_out_features, last_conv_shape = calculate_last_conv_out_features(model)
+        # print(f"Last Conv Out Features: {last_conv_out_features}")
+        # print(f"Last Conv Shape: {last_conv_shape}")
 
-        rebuilt_model = AlexNet_General(new_channels, last_conv_shape).to(device)
+        rebuilt_model = Resnet_General(new_channels).to(device)
         get_core_weights(core_model, pruned_and_unpruned_info["unpruned_weights"])
 
         rebuilt_model = reconstruct_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
