@@ -211,7 +211,7 @@ def main():
         print(f"Applying {pruning_percentage * 100}% pruning...")
         model_to_be_pruned = copy.deepcopy(model)
         # Prune the model
-        core_model, pruned_and_unpruned_info = prune_model(model.model, model_to_be_pruned, device, pruning_percentage=layer_pruning_percentages)
+        core_model, pruned_and_unpruned_info = prune_model(model.model, model_to_be_pruned, device, layer_pruning_percentages=layer_pruning_percentages)
         # core_model, pruned_and_unpruned_info = prune_model(model.model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
         core_model = core_model.to(device)
 
