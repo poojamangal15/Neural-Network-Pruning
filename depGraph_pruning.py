@@ -13,13 +13,84 @@ from utils.plot_utils import plot_metrics
 from utils.device_utils import get_device
 from utils.pruning_analysis import count_parameters, get_pruned_info, get_unpruned_info, extend_channels, AlexNet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, debug_pruning_info, AlexNetLightningModule, model_size_in_mb
 
-def prune_model(original_model, model, device, pruning_percentage=0.2):
+# def prune_model(original_model, model, device, pruning_percentage=0.2):
+#     pruned_info = {}
+    
+#     model = model.to(device)
+#     example_inputs = torch.randn(1, 3, 224, 224, dtype=torch.float32, device=device)
+
+#     # print("MODEL BEFORE PRUNING:\n", model.model)
+
+#     DG = tp.DependencyGraph().build_dependency(model.model, example_inputs)
+#     layers_to_prune = {
+#         "model.features.3": model.model.features[3],
+#         "model.features.6": model.model.features[6],
+#         "model.features.8": model.model.features[8],
+#         "model.features.10": model.model.features[10],
+#     }
+
+
+#     def get_pruning_indices(module, percentage):
+#         with torch.no_grad():
+#             weight = module.weight.data
+#             if isinstance(module, torch.nn.Conv2d):
+#                 channel_norms = weight.abs().mean(dim=[1,2,3])  
+#             else:
+#                 return None
+
+#             pruning_count = int(channel_norms.size(0) * percentage)
+#             if pruning_count == 0:
+#                 return []
+#             _, prune_indices = torch.topk(channel_norms, pruning_count, largest=False)
+#             return prune_indices.tolist()
+ 
+#     groups = []
+#     for layer_name, layer_module in layers_to_prune.items():
+#         if isinstance(layer_module, torch.nn.Conv2d):
+#             prune_fn = tp.prune_conv_out_channels
+#         else:
+#             print(f"Skipping {layer_name}: Unsupported layer type {type(layer_module)}")
+#             continue
+        
+#         pruning_idxs = get_pruning_indices(layer_module, pruning_percentage)
+#         if pruning_idxs is None or len(pruning_idxs) == 0:
+#             print(f"No channels to prune for {layer_name}.")
+#             continue
+
+#         group = DG.get_pruning_group(layer_module, prune_fn, idxs=pruning_idxs)
+#         # print("group.details()", group.details()) 
+#         if DG.check_pruning_group(group):
+#             groups.append((layer_name, group))
+#         else:
+#             print(f"Invalid pruning group for layer {layer_name}, skipping pruning.")
+
+#     if groups:
+#         print(f"Pruning with {pruning_percentage*100}% percentage on {len(groups)} layers...")
+#         for layer_name, group in groups:
+#             print(f"Pruning layer: {layer_name}")
+#             group.prune()
+
+#         print("MODEL AFTER PRUNING:\n", model.model)
+#     else:
+#         print("No valid pruning groups found. The model was not pruned.")
+
+#     # Check for all the pruned and unpruned indices and weights    
+#     pruned_info, num_pruned_channels, pruned_weights = get_pruned_info(groups, original_model)
+#     unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info(groups, original_model)
+
+#     pruned_and_unpruned_info = {"pruned_info": pruned_info, 
+#                                 "num_pruned_channels": num_pruned_channels, 
+#                                 "pruned_weights": pruned_weights, 
+#                                 "unpruned_info": unpruned_info, 
+#                                 "num_unpruned_channels": num_unpruned_channels, 
+#                                 "unpruned_weights": unpruned_weights}
+#     return model, pruned_and_unpruned_info
+
+def prune_model(original_model, model, device, layer_pruning_percentages):
     pruned_info = {}
     
     model = model.to(device)
     example_inputs = torch.randn(1, 3, 224, 224, dtype=torch.float32, device=device)
-
-    # print("MODEL BEFORE PRUNING:\n", model.model)
 
     DG = tp.DependencyGraph().build_dependency(model.model, example_inputs)
     layers_to_prune = {
@@ -29,12 +100,11 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
         "model.features.10": model.model.features[10],
     }
 
-
     def get_pruning_indices(module, percentage):
         with torch.no_grad():
             weight = module.weight.data
             if isinstance(module, torch.nn.Conv2d):
-                channel_norms = weight.abs().mean(dim=[1,2,3])  
+                channel_norms = weight.abs().mean(dim=[1, 2, 3])  
             else:
                 return None
 
@@ -43,7 +113,7 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
                 return []
             _, prune_indices = torch.topk(channel_norms, pruning_count, largest=False)
             return prune_indices.tolist()
- 
+
     groups = []
     for layer_name, layer_module in layers_to_prune.items():
         if isinstance(layer_module, torch.nn.Conv2d):
@@ -52,39 +122,42 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
             print(f"Skipping {layer_name}: Unsupported layer type {type(layer_module)}")
             continue
         
+        # Use layer-specific pruning percentage
+        pruning_percentage = layer_pruning_percentages.get(layer_name, 0.2)  # Default to 20% if not specified
         pruning_idxs = get_pruning_indices(layer_module, pruning_percentage)
         if pruning_idxs is None or len(pruning_idxs) == 0:
             print(f"No channels to prune for {layer_name}.")
             continue
 
         group = DG.get_pruning_group(layer_module, prune_fn, idxs=pruning_idxs)
-        # print("group.details()", group.details()) 
         if DG.check_pruning_group(group):
             groups.append((layer_name, group))
         else:
             print(f"Invalid pruning group for layer {layer_name}, skipping pruning.")
 
     if groups:
-        print(f"Pruning with {pruning_percentage*100}% percentage on {len(groups)} layers...")
+        print(f"Pruning with specified percentages on {len(groups)} layers...")
         for layer_name, group in groups:
-            print(f"Pruning layer: {layer_name}")
+            print(f"Pruning layer: {layer_name} with {layer_pruning_percentages[layer_name]*100}%")
             group.prune()
 
         print("MODEL AFTER PRUNING:\n", model.model)
     else:
         print("No valid pruning groups found. The model was not pruned.")
 
-    # Check for all the pruned and unpruned indices and weights    
     pruned_info, num_pruned_channels, pruned_weights = get_pruned_info(groups, original_model)
     unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info(groups, original_model)
 
-    pruned_and_unpruned_info = {"pruned_info": pruned_info, 
-                                "num_pruned_channels": num_pruned_channels, 
-                                "pruned_weights": pruned_weights, 
-                                "unpruned_info": unpruned_info, 
-                                "num_unpruned_channels": num_unpruned_channels, 
-                                "unpruned_weights": unpruned_weights}
+    pruned_and_unpruned_info = {
+        "pruned_info": pruned_info, 
+        "num_pruned_channels": num_pruned_channels, 
+        "pruned_weights": pruned_weights, 
+        "unpruned_info": unpruned_info, 
+        "num_unpruned_channels": num_unpruned_channels, 
+        "unpruned_weights": unpruned_weights
+    }
     return model, pruned_and_unpruned_info
+
 
 def main():
     wandb.init(project='alexnet_depGraph', name='AlexNet_Prune_Run')
@@ -94,6 +167,13 @@ def main():
     checkpoint_path = "./checkpoints/best_checkpoint_preTrained.ckpt"
 
     model = DepGraphFineTuner.load_from_checkpoint(checkpoint_path).to(device)
+
+    layer_pruning_percentages = {
+        "model.features.3": 0.1,  # Prune 10% of layer 3
+        "model.features.6": 0.2,  # Prune 20% of layer 6
+        "model.features.8": 0.3,  # Prune 30% of layer 8
+        "model.features.10": 0.4, # Prune 40% of layer 10
+    }
 
     metrics_pruned = {
         "pruning_percentage": [],
@@ -112,7 +192,8 @@ def main():
     }
 
     train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
-    pruning_percentages = [0.2, 0.4, 0.6, 0.8]
+    # pruning_percentages = [0.2, 0.4, 0.6, 0.8]
+    pruning_percentages = [0.2]
 
     trainer = pl.Trainer(max_epochs=5 , logger=wandb_logger, accelerator=device.type)
 
@@ -130,7 +211,8 @@ def main():
         print(f"Applying {pruning_percentage * 100}% pruning...")
         model_to_be_pruned = copy.deepcopy(model)
         # Prune the model
-        core_model, pruned_and_unpruned_info = prune_model(model.model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
+        core_model, pruned_and_unpruned_info = prune_model(model.model, model_to_be_pruned, device, pruning_percentage=layer_pruning_percentages)
+        # core_model, pruned_and_unpruned_info = prune_model(model.model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
         core_model = core_model.to(device)
 
         # Count parameters after pruning
