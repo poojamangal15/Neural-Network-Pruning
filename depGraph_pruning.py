@@ -169,11 +169,12 @@ def main():
     model = DepGraphFineTuner.load_from_checkpoint(checkpoint_path).to(device)
 
     layer_pruning_percentages = {
-        "model.features.3": 0.5,  # Prune 50% of layer 3
-        "model.features.6": 0.4,  # Prune 40% of layer 6
-        "model.features.8": 0.3,  # Prune 30% of layer 8
-        "model.features.10": 0.2, # Prune 20% of layer 10
+        "model.features.3": 0.15,  # Slight pruning for a sensitive layer
+        "model.features.6": 0.3,   # Moderate pruning
+        "model.features.8": 0.5,   # Aggressive pruning for less sensitive layers
+        "model.features.10": 0.2,  # Moderate pruning for final layers
     }
+
 
 
     metrics_pruned = {
