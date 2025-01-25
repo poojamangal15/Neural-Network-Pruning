@@ -21,7 +21,7 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
 
     # print("MODEL BEFORE PRUNING:\n", model.model)
 
-    DG = tp.DependencyGraph().build_dependency(model.model, example_inputs)
+    DG = tp.DependencyGraph().build_dependency(model, example_inputs)
     layers_to_prune = {
         "model.features.3": model.model.features[3],
         "model.features.6": model.model.features[6],
