@@ -23,10 +23,10 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
 
     DG = tp.DependencyGraph().build_dependency(model, example_inputs)
     layers_to_prune = {
-        "model.features.3": model.model.features[3],
-        "model.features.6": model.model.features[6],
-        "model.features.8": model.model.features[8],
-        "model.features.10": model.model.features[10],
+        "model.features.3": model.features[3],
+        "model.features.6": model.features[6],
+        "model.features.8": model.features[8],
+        "model.features.10": model.features[10],
     }
 
 
@@ -157,12 +157,21 @@ def iterative_pruning(
         print(f"\n=== Pruning Step {step_idx+1}/{pruning_steps}, Ratio = {pruning_ratios[step_idx]*100:.1f}% ===")
 
         # 1) Prune the model
-        pruned_model, pruned_info = prune_model(
-            original_model=original_model.model,   # The original reference for get_pruned_info
-            model=iterative_model,                 # The model to actually prune
-            device=device,
-            pruning_percentage=pruning_ratios[step_idx]
-        )
+
+        if step_idx == 0:
+            pruned_model, pruned_info = prune_model(
+                original_model=original_model.model,   # The original reference for get_pruned_info
+                model=iterative_model.model,                 # The model to actually prune
+                device=device,
+                pruning_percentage=pruning_ratios[step_idx]
+            )
+        else:
+            pruned_model, pruned_info = prune_model(
+                original_model=original_model.model,   # The original reference for get_pruned_info
+                model=iterative_model.model,                 # The model to actually prune
+                device=device,
+                pruning_percentage=pruning_ratios[step_idx]
+            )
 
         # 2) Evaluate the model immediately after pruning
         pruned_params = count_parameters(pruned_model)
