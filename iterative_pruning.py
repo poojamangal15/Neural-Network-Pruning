@@ -70,7 +70,7 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
             print(f"Pruning layer: {layer_name}")
             group.prune()
 
-        print("MODEL AFTER PRUNING:\n", model.model)
+        print("MODEL AFTER PRUNING:\n", model)
     else:
         print("No valid pruning groups found. The model was not pruned.")
 
@@ -168,7 +168,7 @@ def iterative_pruning(
         else:
             pruned_model, pruned_info = prune_model(
                 original_model=original_model.model,   # The original reference for get_pruned_info
-                model=iterative_model.model,                 # The model to actually prune
+                model=iterative_model,                 # The model to actually prune
                 device=device,
                 pruning_percentage=pruning_ratios[step_idx]
             )
