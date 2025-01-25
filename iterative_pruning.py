@@ -192,7 +192,7 @@ def iterative_pruning(
         # 4) Rebuild the model from pruned + unpruned info (like your code does)
         #    The pruned_and_unpruned_info returned by prune_model is in `pruned_info`.
         new_channels = extend_channels(pruned_model, pruned_info["num_pruned_channels"])
-        last_conv_out_features, last_conv_shape = calculate_last_conv_out_features(iterative_model.model)  # or pruned_model.model
+        last_conv_out_features, last_conv_shape = calculate_last_conv_out_features(original_model.model)  # or pruned_model.model
         rebuilt_model = AlexNet_General(new_channels, last_conv_shape).to(device)
         # fill in unpruned weights
         get_core_weights(pruned_model, pruned_info["unpruned_weights"])
@@ -208,6 +208,7 @@ def iterative_pruning(
         rebuilt_model = freeze_channels(rebuilt_model, pruned_info["unpruned_info"])
         rebuilt_model = rebuilt_model.to(device).to(torch.float32)
 
+        print("Rebuilt model---------->", rebuilt_model)
         # Evaluate immediately after rebuild
         rebuilt_acc, rebuilt_f1 = evaluate_model(rebuilt_model, test_dataloader, device)
         rebuilt_params = count_parameters(rebuilt_model)
