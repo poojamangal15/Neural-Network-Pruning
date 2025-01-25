@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=depGraph                      # Job name
+#SBATCH --job-name=depGraph_iterative            # Job name
 #SBATCH --output=scripts/dep_graph_%j.out        # Standard output log
 #SBATCH --error=scripts/dep_graph_%j.err         # Standard error log
 #SBATCH --nodes=1                                # Number of nodes
@@ -24,4 +24,4 @@ cd $SLURM_SUBMIT_DIR
 
 # Run your script
 # python train.py
-python depGraph_pruning.py
+python iterative_pruning.py
