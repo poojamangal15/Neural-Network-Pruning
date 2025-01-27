@@ -3,6 +3,14 @@ import torch.nn as nn
 import os
 from copy import deepcopy
 from models.depGraph_fineTuner import DepGraphFineTuner
+import torch.optim as optim
+from torch.optim.lr_scheduler import (
+    StepLR,
+    ExponentialLR,
+    CyclicLR,
+    CosineAnnealingLR,
+    ReduceLROnPlateau
+)
                      
 def count_parameters(model):
     """Counts the number of trainable parameters in the model."""
@@ -549,3 +557,101 @@ class AlexNetLightningModule(pl.LightningModule):
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+
+def fine_tuner(model, train_loader, val_loader, num_epochs, optim_type, scheduler_type, exp_name, device, LR=1e-3):
+
+    model = model.to(device)
+
+    # Define loss function and optimizer
+    criterion = nn.CrossEntropyLoss()
+
+    if optim_type == 'SGD':
+        optimizer = optim.SGD(model.parameters(), lr=LR, momentum=0.9, weight_decay=5e-4)
+    else:
+        optimizer = optim.Adam(model.parameters(), lr=LR)
+    
+    # Define LR scheduler
+    if scheduler_type == 'step':
+        scheduler = StepLR(optimizer, step_size=15, gamma=0.1)
+    elif scheduler_type == 'exponential':
+        scheduler = ExponentialLR(optimizer, gamma=0.95)
+    elif scheduler_type == 'cyclic':
+        scheduler = CyclicLR(optimizer, base_lr=1e-5, max_lr=0.01, step_size_up=20, mode='triangular2')
+    elif scheduler_type == 'cosine':
+        scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=0)
+    else:
+        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5)
+        
+
+    train_losses = []
+    train_accuracies = []
+    val_losses = []
+    val_accuracies = []
+    lrs = []  # To track learning rates
+
+    # Fine-tuning loop
+    for epoch in range(num_epochs):
+        model.train()
+        train_loss = 0.0
+        correct = 0
+        total = 0
+        for inputs, labels in train_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            
+            optimizer.zero_grad()
+            
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            
+            loss.backward()
+            optimizer.step()
+            
+            train_loss += loss.item() * inputs.size(0)
+            _, predicted = torch.max(outputs, 1)
+            correct += (predicted == labels).sum().item()
+            total += labels.size(0)
+
+        # Calculate average loss and accuracy for the epoch
+        epoch_loss = train_loss / len(train_loader.dataset)
+        epoch_accuracy = correct / total
+        train_losses.append(epoch_loss)
+        train_accuracies.append(epoch_accuracy)
+        
+        # Validation loop
+        model.eval()
+        val_loss = 0
+        correct = 0
+        total = 0
+
+        with torch.no_grad():
+            for images, labels in val_loader:
+                images, labels = images.to(device), labels.to(device)
+
+                # Forward pass
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+
+                # Accumulate validation metrics
+                val_loss += loss.item() * images.size(0)
+                _, predicted = outputs.max(1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+
+        val_loss /= total
+        val_accuracy = correct / total
+        val_losses.append(val_loss)
+        val_accuracies.append(val_accuracy)
+
+        # Step the scheduler and track learning rate
+        if scheduler_type == 'Default':
+            scheduler.step(val_loss)
+        else:    
+            scheduler.step()
+        
+        current_lr = scheduler.get_last_lr()[0]
+        lrs.append(current_lr)
+        
+        print(f"Epoch [{epoch+1}/{num_epochs}], "f"Train Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_accuracy:.4f}, Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy:.2f}, Learning Rate: {current_lr:.6f}")
+    
+           
+    print("Fine-Tuning Complete")          

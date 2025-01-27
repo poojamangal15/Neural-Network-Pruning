@@ -8,39 +8,42 @@ class DepGraphFineTuner(AlexNetFineTuner):
         super(DepGraphFineTuner, self).__init__(learning_rate=learning_rate, num_classes=num_classes)
         self.custom_device = get_device()
 
-    def fine_tune_model(self, train_loader, val_loader, epochs=3, learning_rate=1e-5):
-        # A simple post-pruning fine-tuning loop
-        optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate)
-        loss_fn = nn.CrossEntropyLoss()
-        self.to(self.custom_device)
+    def fine_tune_model(self, train_dataloader, val_dataloader, device, epochs=1, learning_rate=1e-5):
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        criterion = nn.CrossEntropyLoss()
+        self.to(device).to(torch.float32)  # ensure model is float32 on the chosen device
 
         for epoch in range(epochs):
             self.train()
-            train_loss, train_correct = 0, 0
-            for images, labels in train_loader:
-                images, labels = images.to(self.custom_device), labels.to(self.custom_device)
+            for batch in train_dataloader:
+                inputs, targets = batch
+
+                inputs = inputs.to(device, dtype=torch.float32)
+                targets = targets.to(device)
 
                 optimizer.zero_grad()
-                outputs = self(images)
-                loss = loss_fn(outputs, labels)
+                outputs = self(inputs)
+                loss = criterion(outputs, targets)
                 loss.backward()
                 optimizer.step()
-                train_loss += loss.item()
-                train_correct += (outputs.argmax(dim=1) == labels).sum().item()
 
             self.eval()
-            val_loss, val_correct = 0, 0
             with torch.no_grad():
-                for images, labels in val_loader:
-                    images, labels = images.to(self.custom_device), labels.to(self.custom_device)
-                    outputs = self(images)
-                    loss = loss_fn(outputs, labels)
-                    val_loss += loss.item()
-                    val_correct += (outputs.argmax(dim=1) == labels).sum().item()
+                total_loss = 0
+                correct = 0
+                for batch in val_dataloader:
+                    inputs, targets = batch
 
-            train_acc = train_correct / len(train_loader.dataset)
-            val_acc = val_correct / len(val_loader.dataset)
+                    inputs = inputs.to(device, dtype=torch.float32)
+                    targets = targets.to(device)
 
-            print(f"Post-Pruning Fine-Tune Epoch {epoch + 1}/{epochs}, "
-                  f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}, "
-                  f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
+                    outputs = self(inputs)
+                    total_loss += criterion(outputs, targets).item()
+                    correct += (outputs.argmax(dim=1) == targets).sum().item()
+
+                val_accuracy = correct / len(val_dataloader.dataset)
+                print(
+                    f"Epoch {epoch + 1}/{epochs}, "
+                    f"Validation Accuracy: {val_accuracy:.4f}, "
+                    f"Loss: {total_loss:.4f}"
+                )
