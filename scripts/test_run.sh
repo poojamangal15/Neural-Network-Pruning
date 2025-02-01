@@ -24,4 +24,4 @@ cd $SLURM_SUBMIT_DIR
 
 # Run your script
 # python train.py
-python iterative_pruning.py
+python depGraph_pruning.py

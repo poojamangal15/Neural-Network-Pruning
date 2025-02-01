@@ -169,8 +169,8 @@ def iterative_depgraph_pruning(
         p_size_mb = model_size_in_mb(core_model)
         print(f"[Forward] Post-prune => Acc={p_acc:.4f}, F1={p_f1:.4f}, params={p_params}, size={p_size_mb:.2f}MB")
 
-        prune_meta_data.append({"zero_channels_info" : pruned_and_unpruned_info['pruned_info'], "num_pruned_channels" : pruned_and_unpruned_info['num_pruned_channels'], "pruned_weights" : pruned_and_unpruned_info['pruned_weights']}) 
-        unprune_meta_data.append({"non_zero_channels_info" : pruned_and_unpruned_info['unpruned_info'], "num_unpruned_channels" : pruned_and_unpruned_info['num_unpruned_channels'], "unpruned_weights" : pruned_and_unpruned_info['unpruned_weights']})
+        prune_meta_data.append({"pruned_info" : pruned_and_unpruned_info['pruned_info'], "num_pruned_channels" : pruned_and_unpruned_info['num_pruned_channels'], "pruned_weights" : pruned_and_unpruned_info['pruned_weights']}) 
+        unprune_meta_data.append({"unpruned_info" : pruned_and_unpruned_info['unpruned_info'], "num_unpruned_channels" : pruned_and_unpruned_info['num_unpruned_channels'], "unpruned_weights" : pruned_and_unpruned_info['unpruned_weights']})
 
         print("Pruning Metadata saved successfully.")
         current_model = core_model
@@ -178,37 +178,39 @@ def iterative_depgraph_pruning(
     
     # 3) Fine tune
     print(f"[Iterative] Fine-tuning pruned model for {fine_tune_epochs} epochs.")
-    core_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=fine_tune_epochs, learning_rate=fine_tune_lr)
+    # core_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=fine_tune_epochs, learning_rate=fine_tune_lr)
 
     # Evaluate after fine tuning
     p_acc, p_f1 = evaluate_model(core_model, test_dataloader, device)
     p_size_mb = model_size_in_mb(core_model)
+    pm_params = count_parameters(core_model)
     print(f"[Iterative] Post-prune + fine-tune ratio={ratio*100:.0f}%, Acc={p_acc:.4f}, F1={p_f1:.4f}, size={p_size_mb:.2f} MB")
 
     iteration_results.append({
             "step": f"forward_{i}",
-            "acc": ft_acc,
-            "f1": ft_f1,
+            "acc": p_acc,
+            "f1": p_f1,
             "params": pm_params,
-            "size_mb": ft_size
+            "size_mb": p_size_mb
         })
 
     # 4) Rebuild logic
     if rebuild:
         for step_idx in range(len(prune_ratios)-1, -1, -1):
-            ratio = prune_ratios[step_idx]
-            print(f"\n=== BACKWARD REBUILD STEP {step_idx+1}, ratio={ratio} ===")
+            print(f"{'-'*20} Rebuilding Descendant Model Level-{i+1} {'-'*20}")
 
             # a) Merge channel info: (like your supervisor code, new_channels = unpruned + pruned)
-            new_channels = extend_channels(rebuilt_model, prune_meta_data[step_idx]["num_pruned_channels"])
+            new_channels = extend_channels(core_model, prune_meta_data[step_idx]["num_pruned_channels"])
             # Or if your code does it differently: ...
-            last_conv_out, last_conv_shape = calculate_last_conv_out_features(rebuilt_model.model)
-            
+            last_conv_out, last_conv_shape = calculate_last_conv_out_features(model.model)
+            print(f"Last Conv Out Features: {last_conv_out}")
+            print(f"Last Conv Shape: {last_conv_shape}")
+
             # b) Construct a fresh "AlexNet_General"
             temp_rebuilt = AlexNet_General(new_channels, last_conv_shape).to(device)
             
             # c) Copy core weights
-            get_core_weights(rebuilt_model, unprune_meta_data[step_idx]["unpruned_weights"])
+            get_core_weights(core_model, unprune_meta_data[step_idx]["unpruned_weights"])
 
             # d) Reconstruct from pruned + unpruned
             temp_rebuilt = reconstruct_weights_from_dicts(
@@ -223,7 +225,7 @@ def iterative_depgraph_pruning(
             temp_rebuilt = freeze_channels(temp_rebuilt, unprune_meta_data[step_idx]["unpruned_info"])
 
             # f) Evaluate the newly rebuilt
-            rb_acc, rb_f1 = evaluate_model(temp_rebuilt, test_loader, device)
+            rb_acc, rb_f1 = evaluate_model(temp_rebuilt, test_dataloader, device)
             rb_params = count_parameters(temp_rebuilt)
             rb_size = model_size_in_mb(temp_rebuilt)
             print(f"[Backward Rebuild] Step {step_idx+1} => Acc={rb_acc:.4f}, F1={rb_f1:.4f}, Params={rb_params}, Size={rb_size:.2f} MB")
@@ -233,7 +235,7 @@ def iterative_depgraph_pruning(
             # temp_rebuilt.fine_tune_model(train_loader, val_loader, device, epochs=fine_tune_epochs, learning_rate=fine_tune_lr)
 
             # h) Evaluate after fine-tune
-            r_ft_acc, r_ft_f1 = evaluate_model(temp_rebuilt, test_loader, device)
+            r_ft_acc, r_ft_f1 = evaluate_model(temp_rebuilt, test_dataloader, device)
             r_ft_size = model_size_in_mb(temp_rebuilt)
             print(f"[Backward Rebuild] Post-fine-tune => Acc={r_ft_acc:.4f}, F1={r_ft_f1:.4f}, Size={r_ft_size:.2f} MB")
 
@@ -244,7 +246,7 @@ def iterative_depgraph_pruning(
                 "params": rb_params,
                 "size_mb": r_ft_size
             })
-
+            print("Rebuilt model----->", temp_rebuilt)
             # i) Update reference so we can continue "backward rebuild" from the newly built model
             rebuilt_model = temp_rebuilt
 
@@ -282,7 +284,7 @@ def main():
         prune_ratios=iterative_ratios,
         fine_tune_epochs=5,
         fine_tune_lr=1e-4,
-        rebuild=False
+        rebuild=True
     )
 
     print("\n[FINAL] Iterative Pruning Results:")
