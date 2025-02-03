@@ -1,35 +1,41 @@
 import matplotlib.pyplot as plt
+import pandas as pd
 
-# Data
-pruning_percentage = [20.0, 40.0, 60.0, 80.0]
-model_size_original = [57044810] * len(pruning_percentage)  # Original size repeated for all pruning percentages
-model_size_after_pruning = [48698799, 40518927, 32506240, 24667405]
-model_size_after_rebuild = [57044810, 57044810, 57044810, 57044810]
+# Create a DataFrame from your results (example data, update with your real values)
+data = {
+    "Method": ["Basic Dep FT", "Basic Dep FT+Rebuild", "Layer-wise Mild FT", "Layer-wise Mild FT+Rebuild", 
+               "Layer-wise Agg FT", "Layer-wise Agg FT+Rebuild", 
+               "Iterative Forward", "Iterative Backward 1", "Iterative Backward 2", "Iterative Backward 3"],
+    "Test Accuracy": [0.8958, 0.7736, 0.8913, 0.7795, 0.8708, 0.758, 0.7551, 0.7637, 0.7462, 0.7488],
+    "Model Size (MB)": [185.78, 217.61, 156.65, 217.61, 183.64, 217.61, 92.95, 135.93, 185.78, 217.61]
+}
 
-# Bar plot setup
-bar_width = 0.25
-x = range(len(pruning_percentage))  # X-axis positions for the bars
+df = pd.DataFrame(data)
 
-plt.figure(figsize=(10, 6))
+# # Bar plot for Test Accuracy
+# plt.figure(figsize=(10,6))
+# plt.bar(df["Method"], df["Test Accuracy"], color="skyblue")
+# plt.ylabel("Test Accuracy")
+# plt.title("Test Accuracy Comparison Across Pruning Methods")
+# plt.xticks(rotation=45, ha="right")
+# plt.tight_layout()
+# plt.show()
 
-# Bars for original model size
-plt.bar([p - bar_width for p in x], model_size_original, 
-        width=bar_width, color='gray', label='Original Number of Parameters')
+# # Bar plot for Model Size
+# plt.figure(figsize=(10,6))
+# plt.bar(df["Method"], df["Model Size (MB)"], color="salmon")
+# plt.ylabel("Model Size (MB)")
+# plt.title("Model Size Comparison Across Pruning Methods")
+# plt.xticks(rotation=45, ha="right")
+# plt.tight_layout()
+# plt.show()
 
-# Bars for after pruning
-plt.bar(x, model_size_after_pruning, 
-        width=bar_width, color='orange', label='After Pruning + FT')
 
-# Bars for after rebuilding
-plt.bar([p + bar_width for p in x], model_size_after_rebuild, 
-        width=bar_width, color='cyan', label='After Rebuild + FT')
+import seaborn as sns
 
-# X-axis labels and title
-plt.xticks(x, [f"{int(p)}%" for p in pruning_percentage])  # Labeling with pruning percentages
-plt.title("Number of Parameters vs. Pruning Percentage")
-plt.xlabel("Pruning Percentage (%)")
-plt.ylabel("Number of Parameters")
-plt.legend()
-plt.grid(True, axis='y')
-
+sns.set(style="whitegrid")
+plt.figure(figsize=(10,6))
+sns.scatterplot(data=df, x="Model Size (MB)", y="Test Accuracy", hue="Method", s=100)
+plt.title("Accuracy vs. Model Size Across Pruning Methods")
+plt.tight_layout()
 plt.show()

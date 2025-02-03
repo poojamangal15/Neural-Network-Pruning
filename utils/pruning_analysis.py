@@ -251,7 +251,19 @@ def extend_channels(model, pruned_dict):
 
     return new_channel_dict
 
-
+def get_rebuild_channels(unpruned_channels, pruned_channels):
+    new_channels_dict = {}
+    for name, weight in pruned_channels.items():
+        new_in_channels = int(unpruned_channels[name][1] + pruned_channels[name][1])
+        new_out_channels = int(unpruned_channels[name][0] + pruned_channels[name][0])
+        
+        new_channels_dict[name] = (new_in_channels, new_out_channels)
+        # print("newchannels deictionary", new_channels_dict)
+    
+    if "features.0" not in new_channels_dict:
+    # Assuming original AlexNet has 64 output channels and 3 input channels in the first layer
+        new_channels_dict["features.0"] = (64, 3)
+    return new_channels_dict
 
 def get_core_weights(pruned_model, unpruned_weights):
     for name, module in pruned_model.named_modules():
@@ -347,7 +359,6 @@ class AlexNet_general(nn.Module):
                     f"Validation Accuracy: {val_accuracy:.4f}, "
                     f"Loss: {total_loss:.4f}"
                 )
-
 
 # Function to create the pruned AlexNet
 def AlexNet_General(channel_dict, last_conv_shape):
@@ -450,6 +461,7 @@ def reconstruct_weights_from_dicts(model, pruned_indices, pruned_weights, unprun
                         for j in range(len(unpruned_dim1)):
                             in_idx = unpruned_dim1[j]   # Input channel index
                             layer.weight.data[out_idx, in_idx, :, :].requires_grad = False
+    # print("reconstruct_weights_from_dicts---------", model)
                 
     return model
                       

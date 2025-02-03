@@ -148,20 +148,23 @@ def main():
         # Fine-tune the pruned model using the method from DepGraphFineTuner
         if train_dataloader is not None and val_dataloader is not None:
             print("Starting post-pruning fine-tuning of the pruned model...")
-            core_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=5, learning_rate=1e-4)
+            # core_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=5, learning_rate=1e-4)
 
         pruned_accuracy, pruned_f1 = evaluate_model(core_model, test_dataloader, device)
         print(f"Accuracy after pruning and fine-tuning: {pruned_accuracy:.4f}, Pruned F1 Score: {pruned_f1:.4f}")
 
         # debug_pruning_info(model, core_model, pruned_and_unpruned_info["num_pruned_channels"], pruned_and_unpruned_info["num_unpruned_channels"])
-
+        # print("MODEL_state prev", model)
+        # print("MODEL_state pruned", core_model)
         new_channels = extend_channels(core_model, pruned_and_unpruned_info["num_pruned_channels"])
+        # print("NEW CHANNELS-------------->", new_channels)
         
         last_conv_out_features, last_conv_shape = calculate_last_conv_out_features(model.model)
         print(f"Last Conv Out Features: {last_conv_out_features}")
         print(f"Last Conv Shape: {last_conv_shape}")
 
         rebuilt_model = AlexNet_General(new_channels, last_conv_shape).to(device)
+        # print("temp rebuilt", rebuilt_model)
         get_core_weights(core_model, pruned_and_unpruned_info["unpruned_weights"])
 
         rebuilt_model = reconstruct_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
