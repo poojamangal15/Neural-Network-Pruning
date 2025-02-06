@@ -76,7 +76,7 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
 
     # Check for all the pruned and unpruned indices and weights    
     pruned_info, num_pruned_channels, pruned_weights = get_pruned_info(groups, original_model)
-    unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info(groups, original_model)
+    unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info(groups, original_model, pruned_info)
 
     pruned_and_unpruned_info = {"pruned_info": pruned_info, 
                                 "num_pruned_channels": num_pruned_channels, 
@@ -148,7 +148,7 @@ def main():
         # Fine-tune the pruned model using the method from DepGraphFineTuner
         if train_dataloader is not None and val_dataloader is not None:
             print("Starting post-pruning fine-tuning of the pruned model...")
-            # core_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=5, learning_rate=1e-4)
+            core_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=5, learning_rate=1e-4)
 
         pruned_accuracy, pruned_f1 = evaluate_model(core_model, test_dataloader, device)
         print(f"Accuracy after pruning and fine-tuning: {pruned_accuracy:.4f}, Pruned F1 Score: {pruned_f1:.4f}")
