@@ -21,6 +21,5 @@ def evaluate_model(model, dataloader, device):
             all_labels.extend(labels.cpu().numpy())
 
     accuracy = accuracy_score(all_labels, all_preds)
-    f1 = f1_score(all_labels, all_preds, average='weighted')
-    return accuracy, f1
+    return accuracy
 

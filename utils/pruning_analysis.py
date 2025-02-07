@@ -1,6 +1,8 @@
 import torch
+import torch_pruning as tp
 import torch.nn as nn
 import os
+import copy
 from copy import deepcopy
 from models.depGraph_fineTuner import DepGraphFineTuner
 import torch.optim as optim
@@ -11,7 +13,16 @@ from torch.optim.lr_scheduler import (
     CosineAnnealingLR,
     ReduceLROnPlateau
 )
-                     
+from tqdm import tqdm
+import wandb
+from pytorch_lightning.loggers import WandbLogger
+import pytorch_lightning as pl
+
+
+def get_device():
+    return torch.device("mps" if torch.backends.mps.is_available() else 
+                        "cuda" if torch.cuda.is_available() else "cpu")
+                                       
 def count_parameters(model):
     """Counts the number of trainable parameters in the model."""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -125,6 +136,78 @@ def model_size_in_mb(model):
 #     print("\n[get_pruned_info] num_pruned_channels =>", num_pruned_channels)
 #     return pruned_info, num_pruned_channels, pruned_weights
 
+def prune_model(original_model, model, device, pruning_percentage=0.2):
+    pruned_info = {}
+    
+    model = model.to(device)
+    example_inputs = torch.randn(1, 3, 224, 224, dtype=torch.float32, device=device)
+
+    # print("MODEL BEFORE PRUNING:\n", model.model)
+
+    DG = tp.DependencyGraph().build_dependency(model.model, example_inputs)
+    layers_to_prune = {
+        "model.features.3": model.model.features[3],
+        "model.features.6": model.model.features[6],
+        "model.features.8": model.model.features[8],
+        "model.features.10": model.model.features[10],
+    }
+
+
+    def get_pruning_indices(module, percentage):
+        with torch.no_grad():
+            weight = module.weight.data
+            if isinstance(module, torch.nn.Conv2d):
+                channel_norms = weight.abs().mean(dim=[1,2,3])  
+            else:
+                return None
+
+            pruning_count = int(channel_norms.size(0) * percentage)
+            if pruning_count == 0:
+                return []
+            _, prune_indices = torch.topk(channel_norms, pruning_count, largest=False)
+            return prune_indices.tolist()
+ 
+    groups = []
+    for layer_name, layer_module in layers_to_prune.items():
+        if isinstance(layer_module, torch.nn.Conv2d):
+            prune_fn = tp.prune_conv_out_channels
+        else:
+            print(f"Skipping {layer_name}: Unsupported layer type {type(layer_module)}")
+            continue
+        
+        pruning_idxs = get_pruning_indices(layer_module, pruning_percentage)
+        if pruning_idxs is None or len(pruning_idxs) == 0:
+            print(f"No channels to prune for {layer_name}.")
+            continue
+
+        group = DG.get_pruning_group(layer_module, prune_fn, idxs=pruning_idxs)
+        # print("group.details()", group.details()) 
+        if DG.check_pruning_group(group):
+            groups.append((layer_name, group))
+        else:
+            print(f"Invalid pruning group for layer {layer_name}, skipping pruning.")
+
+    if groups:
+        print(f"Pruning with {pruning_percentage*100}% percentage on {len(groups)} layers...")
+        for layer_name, group in groups:
+            print(f"Pruning layer: {layer_name}")
+            group.prune()
+
+        print("MODEL AFTER PRUNING:\n", model.model)
+    else:
+        print("No valid pruning groups found. The model was not pruned.")
+
+    # Check for all the pruned and unpruned indices and weights    
+    pruned_info, num_pruned_channels, pruned_weights = get_pruned_info(groups, original_model)
+    unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info(groups, original_model, pruned_info)
+
+    pruned_and_unpruned_info = {"pruned_info": pruned_info, 
+                                "num_pruned_channels": num_pruned_channels, 
+                                "pruned_weights": pruned_weights, 
+                                "unpruned_info": unpruned_info, 
+                                "num_unpruned_channels": num_unpruned_channels, 
+                                "unpruned_weights": unpruned_weights}
+    return model, pruned_and_unpruned_info
 
 def get_pruned_info(groups, original_model):
     """
@@ -157,7 +240,7 @@ def get_pruned_info(groups, original_model):
             mod = dep.target.module
             handler_str = str(dep.handler)
 
-            print("MOD HANDLER", mod, handler_str)
+            # print("MOD HANDLER", mod, handler_str)
 
         layer = module_dict.get(layer_name, None)
 
@@ -186,7 +269,7 @@ def get_pruned_info(groups, original_model):
             last_item = group.items[-1]
             pruned_indices = first_item.idxs
 
-            print("last item", last_item)
+            # print("last item", last_item)
 
             # Verify pruned indices against the layer's weight dimensions
             if pruned_indices:
@@ -291,42 +374,15 @@ def get_unpruned_info(groups, original_model, pruned_info):
         all_output_indices = list(range(total_output_channels)) if total_output_channels else []
         all_input_indices  = list(range(total_input_channels))  if total_input_channels else []
 
-        # # Track pruned indices
-        # pruned_dim0 = []
-        # pruned_dim1 = []
-        
-        # print("  [DEBUG] group items:")
-        # if group.items:
-        #     # Access the first Dependency object in group.items
-        #     first_item = group.items[0]
-
-        #     # Get the indices from the first Dependency object
-        #     pruned_indices = first_item.idxs
-
-        #     # print(f"First occurrence of indices: {pruned_indices}")
-
-        #     # Check if these are out_channels or in_channels
-        #     if "out_channels" in str(first_item):
-        #         pruned_dim0.extend(pruned_indices)
-        #     elif "in_channels" in str(first_item):
-        #         pruned_dim1.extend(pruned_indices)
-
-        print("PRUNED INFO", pruned_info)
-        # Deduplicate in case the same indices appear multiple times
         pruned_dim0 = pruned_info[layer_name]['pruned_dim0']
         pruned_dim1 = pruned_info[layer_name]['pruned_dim1']
 
-        print("pruned dim0", pruned_dim0)
-        print("pruned dim1", pruned_dim1)
+        # print("pruned dim0", pruned_dim0)
+        # print("pruned dim1", pruned_dim1)
 
         # Compute the unpruned
         unpruned_dim0 = [i for i in all_output_indices if i not in pruned_dim0]
         unpruned_dim1 = [i for i in all_input_indices  if i not in pruned_dim1]
-        
-        print(f"  [DEBUG] pruned_dim0={pruned_dim0}")
-        print(f"  [DEBUG] pruned_dim1={pruned_dim1}")
-        print(f"  [DEBUG] unpruned_dim0={unpruned_dim0}")
-        print(f"  [DEBUG] unpruned_dim1={unpruned_dim1}")
         
         unpruned_info[layer_name]['unpruned_dim0'] = unpruned_dim0
         unpruned_info[layer_name]['unpruned_dim1'] = unpruned_dim1
@@ -345,11 +401,7 @@ def get_unpruned_info(groups, original_model, pruned_info):
             print(f"    -> Not a Conv2d or Linear, skipping weight extraction for {layer_name}")
             unpruned_weights[layer_name] = None
 
-    # Final debug summary
-    # print("\n[DEBUG] Unpruned Info summary:")
-    # for ln, info in unpruned_info.items():
-    #     print(f"  -> {ln}, unpruned_dim0={info['unpruned_dim0']}, unpruned_dim1={info['unpruned_dim1']}")
-    print("\n[DEBUG] num pruned channels:", num_pruned_channels)
+    print("\nnum pruned channels:", num_pruned_channels)
     print("\nnum_unpruned_channels:", num_unpruned_channels)
     return unpruned_info, num_unpruned_channels, unpruned_weights
 
@@ -588,7 +640,6 @@ def reconstruct_weights_from_dicts(model, pruned_indices, pruned_weights, unprun
                         for j in range(len(unpruned_dim1)):
                             in_idx = unpruned_dim1[j]   # Input channel index
                             layer.weight.data[out_idx, in_idx, :, :].requires_grad = False
-    # print("reconstruct_weights_from_dicts---------", model)
                 
     return model
                       
@@ -638,51 +689,6 @@ def freeze_channels(model, channel_dict):
     return model
 
 
-def debug_pruning_info(
-    original_model: torch.nn.Module,
-    pruned_model: torch.nn.Module,
-    pruned_dict: dict,
-    unpruned_dict: dict
-):
-    """
-    Prints out channel dimensions for Conv2d layers in both the original 
-    and pruned model, along with the values from `pruned_dict`.
-    
-    - `pruned_dict` is typically a dict like:
-          {
-              "features.3": (pruned_out, pruned_in),
-              "features.6": (pruned_out, pruned_in),
-              ...
-          }
-      where each tuple indicates how many out-channels and in-channels 
-      were pruned for that layer.
-    """
-    print("========== ORIGINAL MODEL CHANNELS ==========")
-    for name, module in original_model.named_modules():
-        if isinstance(module, torch.nn.Conv2d):
-            print(f"[{name}] out_ch = {module.out_channels}, in_ch = {module.in_channels}")
-    
-    print("\n========== PRUNED MODEL CHANNELS ==========")
-    for name, module in pruned_model.named_modules():
-        if isinstance(module, torch.nn.Conv2d):
-            print(f"[{name}] out_ch = {module.out_channels}, in_ch = {module.in_channels}")
-    
-    print("\n========== PRUNED_DICT CONTENTS ==========")
-    for name, val in pruned_dict.items():
-        # val might be (pruned_out, pruned_in) or something similar
-        # so let's assume that's the format
-        print(f"[{name}] -> pruned_out = {val[0]}, pruned_in = {val[1]}")
-
-    print("\n========== PRUNED_DICT ==========")
-    for name, val in pruned_dict.items():
-        # e.g., val might be (pruned_out, pruned_in) or a dict with indices
-        print(f"[{name}] -> {val}")
-
-    print("\n========== UNPRUNED_DICT ==========")
-    for name, val in unpruned_dict.items():
-        print(f"[{name}] -> {val}")
-
-
 import pytorch_lightning as pl
 import torch.nn as nn
 import torch
@@ -726,30 +732,23 @@ class AlexNetLightningModule(pl.LightningModule):
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
-def fine_tuner(model, train_loader, val_loader, num_epochs, optim_type, scheduler_type, exp_name, device, LR=1e-3):
 
+def fine_tuner(model, train_loader, val_loader, device, epochs, scheduler_type, patience=3, LR=1e-4):
+    
     model = model.to(device)
-
     # Define loss function and optimizer
     criterion = nn.CrossEntropyLoss()
-
-    if optim_type == 'SGD':
-        optimizer = optim.SGD(model.parameters(), lr=LR, momentum=0.9, weight_decay=5e-4)
-    else:
-        optimizer = optim.Adam(model.parameters(), lr=LR)
+    optimizer = optim.Adam(model.parameters(), lr=LR)
     
     # Define LR scheduler
     if scheduler_type == 'step':
-        scheduler = StepLR(optimizer, step_size=15, gamma=0.1)
+        scheduler = StepLR(optimizer, step_size=50, gamma=0.1)
     elif scheduler_type == 'exponential':
         scheduler = ExponentialLR(optimizer, gamma=0.95)
     elif scheduler_type == 'cyclic':
-        scheduler = CyclicLR(optimizer, base_lr=1e-5, max_lr=0.01, step_size_up=20, mode='triangular2')
-    elif scheduler_type == 'cosine':
-        scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs, eta_min=0)
+        scheduler = CyclicLR(optimizer, base_lr=1e-6, max_lr=1e-3, step_size_up=20, mode='triangular2')
     else:
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5)
-        
+        scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
 
     train_losses = []
     train_accuracies = []
@@ -757,12 +756,18 @@ def fine_tuner(model, train_loader, val_loader, num_epochs, optim_type, schedule
     val_accuracies = []
     lrs = []  # To track learning rates
 
+    # Early stopping setup
+    best_val_loss = float('inf')
+    best_model_wts = copy.deepcopy(model.state_dict())
+    patience_counter = 0
+    
     # Fine-tuning loop
-    for epoch in range(num_epochs):
+    for epoch in tqdm(range(epochs), desc="Epochs"):
         model.train()
         train_loss = 0.0
         correct = 0
         total = 0
+        
         for inputs, labels in train_loader:
             inputs, labels = inputs.to(device), labels.to(device)
             
@@ -784,6 +789,11 @@ def fine_tuner(model, train_loader, val_loader, num_epochs, optim_type, schedule
         epoch_accuracy = correct / total
         train_losses.append(epoch_loss)
         train_accuracies.append(epoch_accuracy)
+        
+        # Step the scheduler and track learning rate
+        scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
+        lrs.append(current_lr)
         
         # Validation loop
         model.eval()
@@ -810,16 +820,34 @@ def fine_tuner(model, train_loader, val_loader, num_epochs, optim_type, schedule
         val_losses.append(val_loss)
         val_accuracies.append(val_accuracy)
 
-        # Step the scheduler and track learning rate
-        if scheduler_type == 'Default':
-            scheduler.step(val_loss)
-        else:    
-            scheduler.step()
-        
-        current_lr = scheduler.get_last_lr()[0]
-        lrs.append(current_lr)
-        
-        print(f"Epoch [{epoch+1}/{num_epochs}], "f"Train Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_accuracy:.4f}, Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy:.2f}, Learning Rate: {current_lr:.6f}")
-    
-           
-    print("Fine-Tuning Complete")          
+        # **Log Metrics to Weights & Biases**
+        wandb.log({
+            f"{scheduler_type}/Train Loss": epoch_loss,
+            f"{scheduler_type}/Train Accuracy": epoch_accuracy,
+            f"{scheduler_type}/Validation Loss": val_loss,
+            f"{scheduler_type}/Validation Accuracy": val_accuracy,
+            f"{scheduler_type}/Learning Rate": current_lr,
+            "Epoch": epoch + 1
+        })
+
+        # Check for early stopping condition
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_model_wts = copy.deepcopy(model.state_dict())  # Save best model
+            patience_counter = 0  # Reset patience counter
+        else:
+            patience_counter += 1  # Increment counter if no improvement
+            
+        print(f"Epoch [{epoch+1}/{epochs}], Scheduler: {scheduler_type}, "
+          f"Train Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_accuracy:.4f}, "
+          f"Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy:.2f}, "
+          f"Learning Rate: {current_lr:.6f}")
+          
+        # Early stopping check
+        if patience_counter >= patience:
+            print(f"Early stopping triggered! Restoring best model from epoch {epoch - patience + 1}.")
+            model.load_state_dict(best_model_wts)  # Restore best model weights
+            break  # Stop training
+
+    print("Fine-Tuning Complete")     
+    return model  # Return the best model

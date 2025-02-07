@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=8                        # Number of CPU cores per task
 #SBATCH --gres=gpu:a100:1                        # Request one A100 GPU
 #SBATCH --mem=120G                               # Memory pool
-#SBATCH --time=08:00:00                          # Time limit: 05 hours
+#SBATCH --time=4-00:00:00                        # 4 days
 #SBATCH --partition=gpu                          # GPU partition to submit to
 
 # Load modules
