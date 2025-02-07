@@ -5,8 +5,8 @@ import wandb
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 import torch.nn as nn
+from utils.alexNet_fineTuner import AlexNetFineTuner
 
-from models.depGraph_fineTuner import DepGraphFineTuner
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model
 from utils.plot_utils import plot_metrics
@@ -119,7 +119,7 @@ def iterative_depgraph_pruning(
 ):
     """
     Perform iterative pruning using DepGraph-based approach.
-    - model: DepGraphFineTuner (unpruned, original).
+    - model: AlexNetFineTuner (unpruned, original).
     - prune_ratios: List of prune percentages. e.g. [0.2, 0.4].
     - fine_tune_epochs: # epochs to fine tune after each pruning step.
     - rebuild: Whether to rebuild the model after each pruning step or only at the end.
@@ -268,8 +268,8 @@ def main():
     device = get_device()
     checkpoint_path = "./checkpoints/best_checkpoint_preTrained.ckpt"
 
-    # Load your original DepGraphFineTuner
-    model = DepGraphFineTuner.load_from_checkpoint(checkpoint_path).to(device)
+    # Load your original AlexNetFineTuner
+    model = AlexNetFineTuner.load_from_checkpoint(checkpoint_path).to(device)
 
     # Load data
     train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)

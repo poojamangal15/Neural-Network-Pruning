@@ -4,7 +4,6 @@ import torch.nn as nn
 import os
 import copy
 from copy import deepcopy
-from models.depGraph_fineTuner import DepGraphFineTuner
 import torch.optim as optim
 from torch.optim.lr_scheduler import (
     StepLR,
@@ -22,7 +21,7 @@ import pytorch_lightning as pl
 def get_device():
     return torch.device("mps" if torch.backends.mps.is_available() else 
                         "cuda" if torch.cuda.is_available() else "cpu")
-                                       
+
 def count_parameters(model):
     """Counts the number of trainable parameters in the model."""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)

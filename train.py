@@ -6,7 +6,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 import wandb
-from models.alexNet_fineTuner import AlexNetFineTuner
+from utils.alexNet_fineTuner import AlexNetFineTuner
 
 def load_cifar10_with_alexnet_transforms(data_dir, batch_size, val_split=0.2):
     from torchvision import datasets, transforms

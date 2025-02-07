@@ -6,7 +6,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 import torch.nn as nn
 
-from models.depGraph_fineTuner import DepGraphFineTuner
+from utils.alexNet_fineTuner import AlexNetFineTuner
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model
 from utils.plot_utils import plot_metrics
@@ -22,7 +22,7 @@ def main(schedulers):
     device = get_device()
     checkpoint_path = "./checkpoints/best_checkpoint_preTrained.ckpt"
 
-    model = DepGraphFineTuner.load_from_checkpoint(checkpoint_path).to(device)
+    model = AlexNetFineTuner.load_from_checkpoint(checkpoint_path).to(device)
     print("MODEL BEFORE PRUNING:\n", model.model)
 
     pruning_percentages = [0.2, 0.4, 0.6, 0.8]
@@ -41,6 +41,7 @@ def main(schedulers):
 
     orig_params = count_parameters(model)
     orig_accuracy = evaluate_model(model, test_dataloader, device)
+    print("Initial accuracy", orig_accuracy)
     pruned_model_size = model_size_in_mb(model)
 
 
