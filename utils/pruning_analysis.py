@@ -22,16 +22,6 @@ def get_device():
     return torch.device("mps" if torch.backends.mps.is_available() else 
                         "cuda" if torch.cuda.is_available() else "cpu")
 
-def count_parameters(model):
-    """Counts the number of trainable parameters in the model."""
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-def model_size_in_mb(model):
-    torch.save(model.state_dict(), "temp.p")
-    size_mb = os.path.getsize("temp.p") / (1024 * 1024)
-    os.remove("temp.p")
-    return size_mb
-
 
 # def get_pruned_info(groups, original_model):
 #     """
@@ -135,7 +125,7 @@ def model_size_in_mb(model):
 #     print("\n[get_pruned_info] num_pruned_channels =>", num_pruned_channels)
 #     return pruned_info, num_pruned_channels, pruned_weights
 
-def prune_model(original_model, model, device, pruning_percentage=0.2):
+def prune_model(original_model, model, device, pruning_percentage=0.2, layer_pruning_percentages=None):
     pruned_info = {}
     
     model = model.to(device)
@@ -174,6 +164,10 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
             print(f"Skipping {layer_name}: Unsupported layer type {type(layer_module)}")
             continue
         
+        #incase of layer wise pruning
+        if layer_pruning_percentages:
+            pruning_percentage = layer_pruning_percentages.get(layer_name, 0.2)     # Default to 20% if not specified
+            
         pruning_idxs = get_pruning_indices(layer_module, pruning_percentage)
         if pruning_idxs is None or len(pruning_idxs) == 0:
             print(f"No channels to prune for {layer_name}.")
@@ -187,7 +181,6 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
             print(f"Invalid pruning group for layer {layer_name}, skipping pruning.")
 
     if groups:
-        print(f"Pruning with {pruning_percentage*100}% percentage on {len(groups)} layers...")
         for layer_name, group in groups:
             print(f"Pruning layer: {layer_name}")
             group.prune()
@@ -686,50 +679,6 @@ def freeze_channels(model, channel_dict):
             weight.register_hook(lambda grad, mask=combined_mask: freeze_grad_hook(grad, mask))
 
     return model
-
-
-import pytorch_lightning as pl
-import torch.nn as nn
-import torch
-import torch.nn.functional as F
-
-class AlexNetLightningModule(pl.LightningModule):
-    def __init__(self, model, learning_rate=1e-3):
-        super().__init__()
-        self.model = model
-        self.learning_rate = learning_rate
-        self.criterion = nn.CrossEntropyLoss()
-
-    def forward(self, x):
-        return self.model(x)
-
-    def training_step(self, batch, batch_idx):
-        inputs, targets = batch
-        outputs = self(inputs)
-        loss = self.criterion(outputs, targets)
-        self.log("train_loss", loss)
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        inputs, targets = batch
-        outputs = self(inputs)
-        loss = self.criterion(outputs, targets)
-        acc = (outputs.argmax(dim=1) == targets).float().mean()
-        self.log("val_loss", loss)
-        self.log("val_acc", acc)
-        return {"val_loss": loss, "val_acc": acc}
-
-    def test_step(self, batch, batch_idx):
-        inputs, targets = batch
-        outputs = self(inputs)
-        loss = self.criterion(outputs, targets)
-        acc = (outputs.argmax(dim=1) == targets).float().mean()
-        self.log("test_loss", loss)
-        self.log("test_acc", acc)
-        return {"test_loss": loss, "test_acc": acc}
-
-    def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
 
 def fine_tuner(model, train_loader, val_loader, device, epochs, scheduler_type, patience=3, LR=1e-4):

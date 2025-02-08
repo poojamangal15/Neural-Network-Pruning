@@ -1,5 +1,6 @@
 import torch
 from sklearn.metrics import accuracy_score, f1_score
+import os
 
 def evaluate_model(model, dataloader, device):
     """
@@ -23,3 +24,12 @@ def evaluate_model(model, dataloader, device):
     accuracy = accuracy_score(all_labels, all_preds)
     return accuracy
 
+def count_parameters(model):
+    """Counts the number of trainable parameters in the model."""
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+def model_size_in_mb(model):
+    torch.save(model.state_dict(), "temp.p")
+    size_mb = os.path.getsize("temp.p") / (1024 * 1024)
+    os.remove("temp.p")
+    return size_mb

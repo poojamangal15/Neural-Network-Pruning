@@ -8,24 +8,9 @@ import torch.nn as nn
 from utils.alexNet_fineTuner import AlexNetFineTuner
 
 from utils.data_utils import load_data
-from utils.eval_utils import evaluate_model
-from utils.plot_utils import plot_metrics
-from utils.device_utils import get_device
-from utils.pruning_analysis import (
-    count_parameters, 
-    get_pruned_info, 
-    get_unpruned_info, 
-    extend_channels, 
-    AlexNet_General, 
-    calculate_last_conv_out_features, 
-    get_core_weights, 
-    reconstruct_weights_from_dicts, 
-    freeze_channels, 
-    debug_pruning_info, 
-    AlexNetLightningModule, 
-    model_size_in_mb,
-    get_rebuild_channels
-)
+from utils.eval_utils import evaluate_model, count_parameters, model_size_in_mb
+from utils.pruning_analysis import get_device, prune_model, get_pruned_info, get_unpruned_info, extend_channels, AlexNet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner
+
 
 # ------------------------------
 # 1) Existing prune_model function
