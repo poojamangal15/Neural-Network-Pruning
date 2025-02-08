@@ -38,8 +38,6 @@ def main():
 
     train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
 
-    trainer = pl.Trainer(max_epochs=5 , logger=wandb_logger, accelerator=device.type)
-
     orig_params = count_parameters(model)
     orig_accuracy = evaluate_model(model, test_dataloader, device)
     print("Initial accuracy", orig_accuracy)
