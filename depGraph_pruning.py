@@ -77,7 +77,7 @@ def main(schedulers):
         rebuilt_model = AlexNet_General(new_channels, last_conv_shape).to(device)
         get_core_weights(core_model, pruned_and_unpruned_info["unpruned_weights"])
         rebuilt_model = reconstruct_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
-        rebuilt_model = freeze_channels(rebuilt_model, pruned_and_unpruned_info["unpruned_info"])
+        # rebuilt_model = freeze_channels(rebuilt_model, pruned_and_unpruned_info["unpruned_info"])
         rebuilt_model = rebuilt_model.to(device).to(torch.float32)
 
 
@@ -112,7 +112,8 @@ def main(schedulers):
             print(f"  Expected stored weight shape: {stored_unpruned_w.shape}")
 
             # Instead of looping over each index pair, slice the rebuilt weights using the unpruned indices.
-            rebuilt_slice = rebuilt_weight[unpruned_dim0][:, unpruned_dim1, :, :]
+            rebuilt_slice = rebuilt_weight[unpruned_dim0, :, :, :][:, unpruned_dim1, :, :]
+            # rebuilt_slice = rebuilt_weight[unpruned_dim0][:, unpruned_dim1, :, :]
             
             if torch.allclose(rebuilt_slice, stored_unpruned_w, atol=1e-7):
                 print(f"Match: rebuilt unpruned weights for layer {layer_name} are in the correct positions.")
