@@ -255,7 +255,7 @@ def get_pruned_info(groups, original_model):
             }
 
         if group.items:
-            # Access the first Dependency object in group.items
+            # Access the first Dependency object in group.items (others have the same indices)
             # print("group.items", group.items)
             first_item = group.items[0]
             last_item = group.items[-1]
@@ -313,8 +313,12 @@ def get_pruned_info(groups, original_model):
 
         if isinstance(layer, nn.Conv2d) and (pruned_dim0_count > 0 or pruned_dim1_count > 0):
             weights = layer.weight.detach()
-            pruned_weight_tensor = weights[dim0_list][:, dim1_list, :, :]
-            pruned_weights[layer_name] = pruned_weight_tensor
+            # pruned_weight_tensor = weights[dim0_list][:, dim1_list, :, :]
+            if dim0_list and dim1_list:
+                pruned_weights[layer_name] = weights[dim0_list, :, :, :][:, dim1_list, :, :]
+            else:
+                pruned_weights[layer_name] = weights[dim0_list, :, :, :]
+            # pruned_weights[layer_name] = pruned_weight_tensor
         else:
             pruned_weights[layer_name] = torch.empty((0, 0))
 
@@ -323,6 +327,7 @@ def get_pruned_info(groups, original_model):
     #     print(f"  -> {ln}, pruned_dim0={info['pruned_dim0']}, unpruned_dim1={info['pruned_dim1']}")
 
     print("\nnum_pruned_channels:", num_pruned_channels)
+    print("features.3 weights-------------", pruned_weights)
     return pruned_info, num_pruned_channels, pruned_weights
 
 
@@ -395,6 +400,7 @@ def get_unpruned_info(groups, original_model, pruned_info):
 
     print("\nnum pruned channels:", num_pruned_channels)
     print("\nnum_unpruned_channels:", num_unpruned_channels)
+
     return unpruned_info, num_unpruned_channels, unpruned_weights
 
 
@@ -600,9 +606,10 @@ def reconstruct_weights_from_dicts(model, pruned_indices, pruned_weights, unprun
             pruned_dim0, pruned_dim1 = pruned_indices[name].values()
             unpruned_dim0, unpruned_dim1 = unpruned_indices[name].values()
 
-
+            print("pruned weights-----------------", pruned_weights)
             # Skip if pruned_weights for this layer is empty
             if name not in pruned_weights or pruned_weights[name].numel() == 0:
+                print("Passing layer--------", name)
                 # No pruned weights to assign
                 pass
             else:
@@ -618,6 +625,10 @@ def reconstruct_weights_from_dicts(model, pruned_indices, pruned_weights, unprun
                         out_idx = pruned_dim0[i]  # Output channel index
                         layer.weight.data[out_idx, :, :, :] = pruned_weights[name][i].to(new_device)
                 
+                print(f"Layer {name}: Rebuilt weight shape = {layer.weight.data.shape}")
+                print(f"Unpruned indices (output): {unpruned_dim0}")
+                print(f"Unpruned indices (input): {unpruned_dim1}")
+                print(f"Stored unpruned weights shape: {unpruned_weights[name].shape}")
 
                 # Assign unpruned weights
                 for i in range(len(unpruned_dim0)):
