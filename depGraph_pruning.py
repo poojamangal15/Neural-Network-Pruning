@@ -111,7 +111,7 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
             groups.append((layer_name, group))
         else:
             print(f"Invalid pruning group for layer {layer_name}, skipping pruning.")
-
+            
     if groups:
         print(f"Pruning with {pruning_percentage*100}% percentage on {len(groups)} layers...")
         for layer_name, group in groups:
@@ -123,8 +123,8 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
         print("No valid pruning groups found. The model was not pruned.")
 
     # Check for all the pruned and unpruned indices and weights    
-    pruned_info, num_pruned_channels, pruned_weights = get_pruned_info(groups, original_model)
-    unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info(groups, original_model)
+    pruned_info, num_pruned_channels, pruned_weights = get_pruned_info(groups, original_model, layers_to_prune)
+    unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info(groups, original_model, pruned_info)
 
     pruned_and_unpruned_info = {"pruned_info": pruned_info, 
                                 "num_pruned_channels": num_pruned_channels, 
@@ -189,7 +189,7 @@ def main():
         pruned_accuracy, pruned_f1 = evaluate_model(core_model, test_dataloader, device)
         print(f"Pruned Accuracy: {pruned_accuracy:.4f}, Pruned F1 Score: {pruned_f1:.4f}")
 
-        debug_pruning_info(model, core_model, pruned_and_unpruned_info["num_pruned_channels"], pruned_and_unpruned_info["num_unpruned_channels"])
+        # debug_pruning_info(model, core_model, pruned_and_unpruned_info["num_pruned_channels"], pruned_and_unpruned_info["num_unpruned_channels"])
 
 
         new_channels = extend_channels(core_model, pruned_and_unpruned_info["num_pruned_channels"])
