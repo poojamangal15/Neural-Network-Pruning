@@ -119,9 +119,12 @@ def get_pruned_info(groups, original_model, layers_to_prune):
 
     module_dict = dict(original_model.named_modules())
 
-    # Global storage to track pruned indices across ALL layers
-    global_pruned_info = {layer_name: {'pruned_dim0': [], 'pruned_dim1': []} for layer_name in layers_to_prune.keys()}
+    all_conv2d_channels = ["features.3", "features.6", "features.8", "features.10"]
 
+    # Global storage to track pruned indices across ALL layers
+    global_pruned_info = {layer_name: {'pruned_dim0': [], 'pruned_dim1': []} for layer_name in all_conv2d_channels}
+
+    print("GLOBAL PRUNED INFO initial dictionary", global_pruned_info)
     # Regular expression to extract layer names (after `=>`)
     pattern = re.compile(r"=> prune_(out|in)_channels on ([\w\d\.\-]+)")
 
@@ -139,7 +142,8 @@ def get_pruned_info(groups, original_model, layers_to_prune):
                 pruning_type, target_layer_name = match.groups()  # Extract pruning type and correct target layer name
 
                 # Ensure the extracted layer is in `layers_to_prune`
-                if target_layer_name in layers_to_prune:
+                if target_layer_name in all_conv2d_channels:
+                    print("TAGRET LAYER NAME", target_layer_name)
                     print(f"🔍 Extracted Pruning: {pruning_type} on {target_layer_name}, Indices: {item.idxs}")
 
                     if pruning_type == "out":
@@ -147,9 +151,10 @@ def get_pruned_info(groups, original_model, layers_to_prune):
                     elif pruning_type == "in":
                         global_pruned_info[target_layer_name]['pruned_dim1'].extend(item.idxs)
 
+    print("GLOBAL PRUNED INFO after all steps dictionary", global_pruned_info)
     # Second pass: Apply pruning information to layers
     for layer_name, layer in module_dict.items():
-        if layer_name not in layers_to_prune:  # Skip layers that aren't in layers_to_prune
+        if layer_name not in all_conv2d_channels:  # Skip layers that aren't in layers_to_prune
             continue
 
         if not isinstance(layer, nn.Conv2d):
@@ -181,7 +186,6 @@ def get_pruned_info(groups, original_model, layers_to_prune):
         else:
             pruned_weights[layer_name] = torch.empty((0, 0))
 
-    print("\n✅ Updated `num_pruned_channels`:", num_pruned_channels)
     return pruned_info, num_pruned_channels, pruned_weights
 
 
@@ -214,7 +218,6 @@ def get_unpruned_info(groups, original_model, pruned_info):
         if layer_name not in unpruned_info:
             unpruned_info[layer_name] = {'unpruned_dim0': [], 'unpruned_dim1': []}
 
-        # If it's Conv2d, store shape info
         if isinstance(layer, torch.nn.Conv2d):
             total_output_channels = layer.weight.shape[0]
             total_input_channels  = layer.weight.shape[1]
@@ -226,9 +229,6 @@ def get_unpruned_info(groups, original_model, pruned_info):
 
         pruned_dim0 = pruned_info[layer_name]['pruned_dim0']
         pruned_dim1 = pruned_info[layer_name]['pruned_dim1']
-
-        # print("pruned dim0", pruned_dim0)
-        # print("pruned dim1", pruned_dim1)
 
         # Compute the unpruned
         unpruned_dim0 = [i for i in all_output_indices if i not in pruned_dim0]
@@ -431,9 +431,6 @@ def high_level_pruner(original_model, model, device, pruning_percentage=0.2, lay
             group.prune()    
 
         print("num pruned info", num_pruned_channels)
-    # # Check for all the pruned and unpruned indices and weights    
-    # pruned_info, num_pruned_channels, pruned_weights = get_pruned_indices_and_counts(model)
-    # unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_indices_and_counts(model)
     unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info_high_level(model, pruned_info)
 
     pruned_and_unpruned_info = {"pruned_info": pruned_info, 
@@ -492,7 +489,7 @@ def get_unpruned_info_high_level(model, pruned_info):
             elif isinstance(module, torch.nn.Linear):
                 unpruned_weights[name] = module.weight.data[unpruned_out][:, unpruned_in].clone()
 
-    print("num unpruned weights", num_unpruned_channels)
+    print("num unpruned channels", num_unpruned_channels)
     return unpruned_info, num_unpruned_channels, unpruned_weights
 
 def get_pruned_indices_and_counts(model):
@@ -633,13 +630,9 @@ def extend_channels(model, pruned_dict):
             name = name[len("model."):]
 
         if isinstance(module, nn.Conv2d):
-            # Handle the first layer (features.0) differently
-            # print("name, pruned dict", name, pruned_dict.get(name, (0, 0))[0])
-            # print("module.weight" ,module.weight.data.shape[1])
 
             new_in_channel = module.weight.data.shape[1] + pruned_dict.get(name, (0, 0))[1]
             new_out_channel = module.weight.data.shape[0] + pruned_dict.get(name, (0, 0))[0]
-            # print("new in and out channels", new_in_channel, new_out_channel)
 
             new_channel_dict[name] = (int(new_out_channel), int(new_in_channel))
 
@@ -652,16 +645,17 @@ def get_rebuild_channels(unpruned_channels, pruned_channels):
         new_out_channels = int(unpruned_channels[name][0] + pruned_channels[name][0])
         
         new_channels_dict[name] = (new_in_channels, new_out_channels)
-        # print("newchannels deictionary", new_channels_dict)
     
     if "features.0" not in new_channels_dict:
-    # Assuming original AlexNet has 64 output channels and 3 input channels in the first layer
         new_channels_dict["features.0"] = (64, 3)
+
+    print("REBUILD CHANNELS DICTIONARY", new_channels_dict)
     return new_channels_dict
 
 def get_core_weights(pruned_model, unpruned_weights):
     for name, module in pruned_model.named_modules():
         if isinstance(module, nn.Conv2d):
+            print("UNPRUNED WEIGHTS NAME", name)
             unpruned_weights[name] = module.weight.data
 
 class AlexNet_general(nn.Module):
@@ -827,7 +821,6 @@ def reconstruct_weights_from_dicts(model, pruned_indices, pruned_weights, unprun
     # Iterate through the model's state_dict to dynamically fetch layer shapes
     for name, layer in model.named_modules():
         if isinstance(layer, nn.Conv2d):
-            print("NAME", name)
             if layer is None and layer_name.startswith("model."):
                 layer_name = layer_name[len("model."):]
             new_device = layer.weight.device
@@ -841,10 +834,8 @@ def reconstruct_weights_from_dicts(model, pruned_indices, pruned_weights, unprun
             pruned_dim0, pruned_dim1 = pruned_indices[name].values()
             unpruned_dim0, unpruned_dim1 = unpruned_indices[name].values()
 
-            print("pruned weights-----------------", pruned_weights)
             # Skip if pruned_weights for this layer is empty
             if name not in pruned_weights or pruned_weights[name].numel() == 0:
-                print("Passing layer--------", name)
                 # No pruned weights to assign
                 pass
             else:

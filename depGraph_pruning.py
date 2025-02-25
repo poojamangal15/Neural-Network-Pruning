@@ -79,6 +79,7 @@ def main(schedulers):
         # rebuilt_model = freeze_channels(rebuilt_model, pruned_and_unpruned_info["unpruned_info"])
         rebuilt_model = rebuilt_model.to(device).to(torch.float32)
 
+        print("REBUILD MODEL", rebuilt_model)
         rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
         rebuild_model_size = model_size_in_mb(rebuilt_model)
 
