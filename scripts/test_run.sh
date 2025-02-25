@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=depGraph_iterative            # Job name
+#SBATCH --job-name=depGraph                      # Job name
 #SBATCH --output=scripts/dep_graph_%j.out        # Standard output log
 #SBATCH --error=scripts/dep_graph_%j.err         # Standard error log
 #SBATCH --nodes=1                                # Number of nodes
@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=8                        # Number of CPU cores per task
 #SBATCH --gres=gpu:a100:1                        # Request one A100 GPU
 #SBATCH --mem=120G                               # Memory pool
-#SBATCH --time=4-00:00:00                        # 4 days
+#SBATCH --time=20:00:00                          # 20 hours 
 #SBATCH --partition=gpu                          # GPU partition to submit to
 
 # Load modules
