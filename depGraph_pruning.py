@@ -62,8 +62,7 @@ def main(schedulers):
         })
 
         print("Starting post-pruning fine-tuning of the pruned model...")
-        # core_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=5, learning_rate=1e-4)
-        fine_tuner(core_model, train_dataloader, val_dataloader, device, epochs=5, scheduler_type=schedulers, LR=1e-4)
+        fine_tuner(core_model, train_dataloader, val_dataloader, device, fineTuningType = "pruning", epochs=5, scheduler_type=schedulers, LR=1e-4)
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
 
         wandb.log({
@@ -90,8 +89,7 @@ def main(schedulers):
         })
 
         print("Starting post-rebuilding fine-tuning of the pruned model...")
-        # rebuilt_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=5, learning_rate=1e-4)
-        fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, epochs=5, scheduler_type=schedulers, LR=1e-4)
+        fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, fineTuningType="rebuild", epochs=5, scheduler_type=schedulers, LR=1e-4)
 
         rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
 
