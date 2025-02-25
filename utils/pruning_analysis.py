@@ -11,22 +11,93 @@ import re
 def get_device():
     return torch.device("mps" if torch.backends.mps.is_available() else 
                         "cuda" if torch.cuda.is_available() else "cpu")
-                        
-def count_parameters(model):
-    """Counts the number of trainable parameters in the model."""
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+def prune_model(original_model, model, device, pruning_percentage=0.2):
+    pruned_info = {}
+    
+    model = model.to(device)
+    example_inputs = torch.randn(1, 3, 224, 224, dtype=torch.float32, device=device)
+
+    DG = tp.DependencyGraph().build_dependency(model, example_inputs)
+    layers_to_prune = {
+        "layer1.0.conv1": model.layer1[0].conv1,
+        "layer1.0.conv2": model.layer1[0].conv2,
+        "layer1.1.conv1": model.layer1[1].conv1,
+        "layer1.1.conv2": model.layer1[1].conv2,
+        "layer1.2.conv1": model.layer1[2].conv1,
+        "layer1.2.conv2": model.layer1[2].conv2,
+        "layer2.0.conv1": model.layer2[0].conv1,
+        "layer2.0.conv2": model.layer2[0].conv2,
+        "layer2.1.conv1": model.layer2[1].conv1,
+        "layer2.1.conv2": model.layer2[1].conv2,
+        "layer2.2.conv1": model.layer2[2].conv1,
+        "layer2.2.conv2": model.layer2[2].conv2,
+        "layer3.0.conv1": model.layer3[0].conv1,
+        "layer3.0.conv2": model.layer3[0].conv2,
+        "layer3.1.conv1": model.layer3[1].conv1,
+        "layer3.1.conv2": model.layer3[1].conv2,
+        "layer3.2.conv1": model.layer3[2].conv1,
+        "layer3.2.conv2": model.layer3[2].conv2,
+    }
 
 
-def model_size_in_mb(model):
-    torch.save(model.state_dict(), "temp.p")
-    size_mb = os.path.getsize("temp.p") / (1024 * 1024)
-    os.remove("temp.p")
-    return size_mb
 
+    def get_pruning_indices(module, percentage):
+        with torch.no_grad():
+            weight = module.weight.data
+            if isinstance(module, torch.nn.Conv2d):
+                channel_norms = weight.abs().mean(dim=[1,2,3])  
+            else:
+                return None
 
-import torch
-import torch.nn as nn
-import re  # Import regex to extract layer names
+            pruning_count = int(channel_norms.size(0) * percentage)
+            if pruning_count == 0:
+                return []
+            _, prune_indices = torch.topk(channel_norms, pruning_count, largest=False)
+            return prune_indices.tolist()
+ 
+    groups = []
+    for layer_name, layer_module in layers_to_prune.items():
+        if isinstance(layer_module, torch.nn.Conv2d):
+            prune_fn = tp.prune_conv_out_channels
+        else:
+            print(f"Skipping {layer_name}: Unsupported layer type {type(layer_module)}")
+            continue
+        
+        pruning_idxs = get_pruning_indices(layer_module, pruning_percentage)
+        if pruning_idxs is None or len(pruning_idxs) == 0:
+            print(f"No channels to prune for {layer_name}.")
+            continue
+
+        group = DG.get_pruning_group(layer_module, prune_fn, idxs=pruning_idxs)
+        # print("group.details()", group.details()) 
+        if DG.check_pruning_group(group):
+            groups.append((layer_name, group))
+        else:
+            print(f"Invalid pruning group for layer {layer_name}, skipping pruning.")
+            
+    if groups:
+        print(f"Pruning with {pruning_percentage*100}% percentage on {len(groups)} layers...")
+        for layer_name, group in groups:
+            print(f"Pruning layer: {layer_name}")
+            group.prune()
+
+        print("MODEL AFTER PRUNING:\n", model)
+    else:
+        print("No valid pruning groups found. The model was not pruned.")
+
+    # Check for all the pruned and unpruned indices and weights    
+    pruned_info, num_pruned_channels, pruned_weights = get_pruned_info(groups, original_model, layers_to_prune)
+    unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info(groups, original_model, pruned_info)
+
+    pruned_and_unpruned_info = {"pruned_info": pruned_info, 
+                                "num_pruned_channels": num_pruned_channels, 
+                                "pruned_weights": pruned_weights, 
+                                "unpruned_info": unpruned_info, 
+                                "num_unpruned_channels": num_unpruned_channels, 
+                                "unpruned_weights": unpruned_weights}
+    return model, pruned_and_unpruned_info
+
 
 def get_pruned_info(groups, original_model, layers_to_prune):
     """
