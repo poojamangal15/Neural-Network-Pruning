@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name=depGraph                      # Job name
-#SBATCH --output=scripts/dep_graph_%j.out        # Standard output log
-#SBATCH --error=scripts/dep_graph_%j.err         # Standard error log
+#SBATCH --job-name=resNet                      # Job name
+#SBATCH --output=scripts/resNet_%j.out        # Standard output log
+#SBATCH --error=scripts/resNet_%j.err         # Standard error log
 #SBATCH --nodes=1                                # Number of nodes
 #SBATCH --ntasks=1                               # Number of tasks
 #SBATCH --cpus-per-task=8                        # Number of CPU cores per task
@@ -23,4 +23,4 @@ source venv/bin/activate
 cd $SLURM_SUBMIT_DIR
 
 # Run your script
-python depGraph_pruning.py
+python softPruning.py

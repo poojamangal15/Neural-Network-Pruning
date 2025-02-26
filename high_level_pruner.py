@@ -8,12 +8,13 @@ import torch.nn as nn
 
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model, count_parameters, model_size_in_mb
+# from utils.device_utils import get_device
+from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, Resnet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, high_level_pruner
 
-from utils.pruning_analysis import get_device, prune_model, get_pruned_info, get_unpruned_info, extend_channels, fine_tuner, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, Resnet_General
 
 
 def main(schedulers):
-    wandb.init(project='resnet20_depGraph', name='ResNet20_Prune_Run')
+    wandb.init(project='resNet_depGraph', name='ResNetHighLevelPruner')
     wandb_logger = WandbLogger(log_model=False)
 
     device = get_device()
@@ -21,6 +22,7 @@ def main(schedulers):
     model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_resnet20", pretrained=True).to(device)
     print("MODEL BEFORE PRUNING", model)
 
+    # pruning_percentages = [0.2, 0.4, 0.6, 0.8]
     pruning_percentages = [0.2]
 
     metrics_pruned = {
@@ -37,18 +39,21 @@ def main(schedulers):
     print("Initial accuracy", orig_accuracy)
     pruned_model_size = model_size_in_mb(model)
 
+
     for pruning_percentage in pruning_percentages:
         print(f"Applying {pruning_percentage * 100}% pruning...")
         model_to_be_pruned = copy.deepcopy(model)
-
         # Prune the model
-        core_model, pruned_and_unpruned_info = prune_model(model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
+        core_model, pruned_and_unpruned_info = high_level_pruner(model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
         core_model = core_model.to(device)
-
+        print("core model", core_model)
         # Count parameters after pruning
         pruned_params = count_parameters(core_model)
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
-        pruned_model_size = model_size_in_mb(core_model)    
+        pruned_model_size = model_size_in_mb(core_model)
+
+        print("COUNT PARAMS", pruned_params)
+        print("MODEL SIZE", pruned_model_size)
 
         wandb.log({
             "Pruning Percentage": pruning_percentage * 100,
@@ -57,34 +62,29 @@ def main(schedulers):
             "Params Reduced (%)": orig_params - pruned_params
         })
 
-        # Fine-tune the pruned model using the method from DepGraphFineTuner
         print("Starting post-pruning fine-tuning of the pruned model...")
         # fine_tuner(core_model, train_dataloader, val_dataloader, device, fineTuningType = "pruning", epochs=5, scheduler_type=schedulers, LR=1e-4)
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
 
         wandb.log({
-            "Pruning Percentage": pruning_percentage * 100,
+            "After Fine Tune Pruning Percentage": pruning_percentage * 100,
             "Test Accuracy (After Fine-Tuning)": pruned_accuracy,
         })
 
-        new_channels = extend_channels(core_model, pruned_and_unpruned_info["num_pruned_channels"])
-        
-        # last_conv_out_features, last_conv_shape = calculate_last_conv_out_features(model)
+        new_channels = extend_channels(core_model, pruned_and_unpruned_info["num_pruned_channels"])        
+        last_conv_out_features, last_conv_shape = calculate_last_conv_out_features(model)
 
-        rebuilt_model = Resnet_General(new_channels).to(device)
+        rebuilt_model = Resnet_General(new_channels, last_conv_shape).to(device)
         get_core_weights(core_model, pruned_and_unpruned_info["unpruned_weights"])
-
         rebuilt_model = reconstruct_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
         # rebuilt_model = freeze_channels(rebuilt_model, pruned_and_unpruned_info["unpruned_info"])
-
         rebuilt_model = rebuilt_model.to(device).to(torch.float32)
-        print(rebuilt_model)
 
         rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
         rebuild_model_size = model_size_in_mb(rebuilt_model)
 
         wandb.log({
-            "Pruning Percentage": pruning_percentage * 100,
+            "After Rebuild Pruning Percentage": pruning_percentage * 100,
             "Test Accuracy (After Rebuilding)": rebuild_accuracy,
             "Model Size (MB) After Rebuilding": rebuild_model_size
         })
@@ -122,7 +122,6 @@ def main(schedulers):
 
         rebuilt_model.zero_grad()
         rebuilt_model.to("cpu")
-
     wandb.finish()
 
 if __name__ == "__main__":
