@@ -14,7 +14,7 @@ from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, ge
 
 
 def main(schedulers):
-    wandb.init(project='resNet_depGraph', name='ResNetHighLevelPruner')
+    wandb.init(project='resNet_depGraph', name='LrChange')
     wandb_logger = WandbLogger(log_model=False)
 
     device = get_device()
@@ -47,6 +47,7 @@ def main(schedulers):
         core_model, pruned_and_unpruned_info = high_level_pruner(model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
         core_model = core_model.to(device)
         print("core model", core_model)
+        # torch.onnx.export(core_model, (torch.rand(1, 3, 32, 32).to(device),), "resNet_coreModel.onnx")
         # Count parameters after pruning
         pruned_params = count_parameters(core_model)
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
@@ -63,7 +64,7 @@ def main(schedulers):
         })
 
         print("Starting post-pruning fine-tuning of the pruned model...")
-        # fine_tuner(core_model, train_dataloader, val_dataloader, device, fineTuningType = "pruning", epochs=5, scheduler_type=schedulers, LR=1e-4)
+        fine_tuner(core_model, train_dataloader, val_dataloader, device, fineTuningType = "pruning", epochs=50, scheduler_type=schedulers, LR=1e-3)
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
 
         wandb.log({
@@ -72,13 +73,56 @@ def main(schedulers):
         })
 
         new_channels = extend_channels(core_model, pruned_and_unpruned_info["num_pruned_channels"])        
-        last_conv_out_features, last_conv_shape = calculate_last_conv_out_features(model)
 
-        rebuilt_model = Resnet_General(new_channels, last_conv_shape).to(device)
+        rebuilt_model = Resnet_General(new_channels).to(device)
         get_core_weights(core_model, pruned_and_unpruned_info["unpruned_weights"])
         rebuilt_model = reconstruct_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
         # rebuilt_model = freeze_channels(rebuilt_model, pruned_and_unpruned_info["unpruned_info"])
         rebuilt_model = rebuilt_model.to(device).to(torch.float32)
+
+        print(rebuilt_model)
+
+        # Check for rebuild model weights
+
+
+        rebuilt_modules = dict(rebuilt_model.named_modules())
+
+        # Iterate over each layer for which you stored unpruned info.
+        for layer_name, unpruned_info in pruned_and_unpruned_info["unpruned_info"].items():
+            # Adjust layer naming if needed (e.g., if your rebuilt model has a prefix "model.")
+            candidate_names = [layer_name, "model." + layer_name]
+            for cname in candidate_names:
+                if cname in rebuilt_modules:
+                    layer = rebuilt_modules[cname]
+                    break
+            else:
+                print(f"[WARNING] Layer {layer_name} not found in rebuilt model. Skipping.")
+                continue
+
+            if not isinstance(layer, nn.Conv2d):
+                print(f"Layer {layer_name} is not Conv2d. Skipping weight check.")
+                continue
+
+            rebuilt_weight = layer.weight.data.cpu()
+            stored_unpruned_w = pruned_and_unpruned_info["unpruned_weights"][layer_name].cpu()
+
+            # Get the unpruned indices for output and input channels.
+            unpruned_dim0 = unpruned_info["unpruned_dim0"]
+            unpruned_dim1 = unpruned_info["unpruned_dim1"]
+
+            print(f"\nComparing unpruned weights for layer {layer_name}:")
+            print(f"  Unpruned output indices: {unpruned_dim0}")
+            print(f"  Unpruned input indices:  {unpruned_dim1}")
+            print(f"  Expected stored weight shape: {stored_unpruned_w.shape}")
+
+            # Instead of looping over each index pair, slice the rebuilt weights using the unpruned indices.
+            rebuilt_slice = rebuilt_weight[unpruned_dim0, :, :, :][:, unpruned_dim1, :, :]
+            # rebuilt_slice = rebuilt_weight[unpruned_dim0][:, unpruned_dim1, :, :]
+            
+            if torch.allclose(rebuilt_slice, stored_unpruned_w, atol=1e-7):
+                print(f"Match: rebuilt unpruned weights for layer {layer_name} are in the correct positions.")
+            else:
+                print(f"Mismatch: rebuilt unpruned weights for layer {layer_name} differ from the stored weights.")
 
         rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
         rebuild_model_size = model_size_in_mb(rebuilt_model)
@@ -90,7 +134,7 @@ def main(schedulers):
         })
 
         print("Starting post-rebuilding fine-tuning of the pruned model...")
-        # fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, fineTuningType="rebuild", epochs=5, scheduler_type=schedulers, LR=1e-4)
+        fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, fineTuningType="rebuild", epochs=50, scheduler_type=schedulers, LR=1e-3)
 
         rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
 

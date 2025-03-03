@@ -23,4 +23,4 @@ source venv/bin/activate
 cd $SLURM_SUBMIT_DIR
 
 # Run your script
-python softPruning.py
+python high_level_pruner.py

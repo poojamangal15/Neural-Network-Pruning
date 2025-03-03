@@ -162,9 +162,9 @@ def high_level_pruner(original_model, model, device, pruning_percentage=0.2, lay
                 layer_name = layer_name[len("model."):]  # Reassign directly
 
             # Initialize storage format
-            if layer_name not in pruned_info:
+            if layer_name not in pruned_info and isinstance(target_layer, nn.Conv2d):
                 pruned_info[layer_name] = {'pruned_dim0': [], 'pruned_dim1': []}
-                pruned_weights[layer_name] = torch.empty(0)  # Default empty tensor
+                pruned_weights[layer_name] = torch.empty(0)
                 num_pruned_channels[layer_name] = (0, 0)
 
             if isinstance(target_layer, nn.Conv2d):
@@ -179,22 +179,24 @@ def high_level_pruner(original_model, model, device, pruning_percentage=0.2, lay
                     num_pruned_channels[layer_name] = (len(pruned_info[layer_name]['pruned_dim0']), num_pruned_channels[layer_name][1])
                     pruned_weights[layer_name] = target_layer.weight.data[idxs, :, :, :].clone()
 
-            elif isinstance(target_layer, nn.Linear):
-                if pruning_fn in [tp.prune_linear_in_channels]:
-                    pruned_info[layer_name]['pruned_dim1'].extend(idxs)
-                    num_pruned_channels[layer_name] = (num_pruned_channels[layer_name][0], len(pruned_info[layer_name]['pruned_dim1']))
-                    pruned_weights[layer_name] = target_layer.weight.data[:, idxs].clone()
+            # elif isinstance(target_layer, nn.Linear):
+            #     if pruning_fn in [tp.prune_linear_in_channels]:
+            #         pruned_info[layer_name]['pruned_dim1'].extend(idxs)
+            #         num_pruned_channels[layer_name] = (num_pruned_channels[layer_name][0], len(pruned_info[layer_name]['pruned_dim1']))
+            #         pruned_weights[layer_name] = target_layer.weight.data[:, idxs].clone()
 
 
-                elif pruning_fn in [tp.prune_linear_out_channels]:
-                    pruned_info[layer_name]['pruned_dim0'].extend(idxs)
-                    num_pruned_channels[layer_name] = (len(pruned_info[layer_name]['pruned_dim0']), num_pruned_channels[layer_name][1])
-                    pruned_weights[layer_name] = target_layer.weight.data[idxs, :].clone()
-        print(group)
+            #     elif pruning_fn in [tp.prune_linear_out_channels]:
+            #         pruned_info[layer_name]['pruned_dim0'].extend(idxs)
+            #         num_pruned_channels[layer_name] = (len(pruned_info[layer_name]['pruned_dim0']), num_pruned_channels[layer_name][1])
+            #         pruned_weights[layer_name] = target_layer.weight.data[idxs, :].clone()
+        # print(group)
+            # print("Layer name", layer_name)
+            # print("Pruned info of layer", pruned_info[layer_name])
         group.prune()    
 
     print("num pruned info", num_pruned_channels)
-    unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info_high_level(model, pruned_info)
+    unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info_high_level(original_model, pruned_info)
 
     pruned_and_unpruned_info = {"pruned_info": pruned_info, 
                                 "num_pruned_channels": num_pruned_channels, 
@@ -290,53 +292,95 @@ def soft_pruning(original_model, model, device, pruning_percentage=0.2, layer_pr
         # finetune your model here
     return model, pruned_and_unpruned_info
 
+
 def get_unpruned_info_high_level(model, pruned_info):
     """
-    Extracts unpruned indices, weights, and counts for all layers in the model.
-
-    Parameters:
-        - model (nn.Module): The PyTorch model (after soft pruning).
-        - pruned_info (dict): Dictionary containing pruned indices for each layer.
-
-    Returns:
-        - unpruned_info (dict): Layer-wise unpruned indices for input & output channels.
-        - num_unpruned_channels (dict): Number of remaining (unpruned) channels per layer.
-        - unpruned_weights (dict): Tensor weights for unpruned channels.
+    Derives which indices were not pruned (the complement of pruned indices).
+    Returns unpruned_info, a dict for each layer with "unpruned_dim0" and "unpruned_dim1";
+    num_unpruned_channels, and unpruned_weights.
     """
+
     unpruned_info = {}
     num_unpruned_channels = {}
     unpruned_weights = {}
 
+    # Utility to build sorted list of unpruned indices
+    def get_unpruned_indices(total_count, pruned_list):
+        """Return sorted list of indices not in pruned_list."""
+        all_indices = set(range(total_count))
+        pruned_set = set(pruned_list)
+        unpruned_set = all_indices - pruned_set
+        return sorted(list(unpruned_set))
+
     for name, module in model.named_modules():
-        
-        if name.startswith("model."):
-            name = name[len("model."):]
+        # If the module wasn't pruned at all in your workflow, you can optionally store "no prunes" or skip
+        if name not in pruned_info:
+            print("INSIDE IF NOT IN PRUNED INFO")
+            # By default, assume no pruning took place on this layer
+            if isinstance(module, nn.Conv2d):
+                print("INSIDE IF NOT IN PRUNED INFO conv2d")
+                out_channels, in_channels = module.weight.data.shape[:2]
+                unpruned_dim0 = list(range(out_channels))
+                unpruned_dim1 = list(range(in_channels))
+            elif isinstance(module, nn.Linear):
+                print("INSIDE IF NOT IN PRUNED INFO linear")
+                out_features, in_features = module.weight.data.shape
+                unpruned_dim0 = list(range(out_features))
+                unpruned_dim1 = list(range(in_features))
+            else:
+                # If it doesn't match conv/linear, skip or store empty
+                continue
 
-        if isinstance(module, (torch.nn.Conv2d, torch.nn.Linear)):
-            # Get original dimensions
-            out_channels = module.weight.shape[0]
-            in_channels = module.weight.shape[1] if isinstance(module, torch.nn.Conv2d) else module.weight.shape[1]
+            unpruned_info[name] = {
+                "unpruned_dim0": unpruned_dim0,
+                "unpruned_dim1": unpruned_dim1
+            }
+            num_unpruned_channels[name] = (len(unpruned_dim0), len(unpruned_dim1))
 
-            # Get pruned indices for this layer
-            pruned_out = set(pruned_info.get(name, {}).get('pruned_dim0', []))
-            pruned_in = set(pruned_info.get(name, {}).get('pruned_dim1', []))
+            # If you want to store the entire (unpruned) weight, you can do so:
+            unpruned_weights[name] = module.weight.data.clone()
 
-            # Compute unpruned indices
-            unpruned_out = sorted(set(range(out_channels)) - pruned_out)
-            unpruned_in = sorted(set(range(in_channels)) - pruned_in)
+        else:
+            print("INSIDE ELSE")
+            pruned_dim0 = pruned_info[name].get("pruned_dim0", [])
+            print("PRUNED DIM0 of layer ", name, pruned_dim0)
+            pruned_dim1 = pruned_info[name].get("pruned_dim1", [])
+
+            if isinstance(module, nn.Conv2d):
+                # Weight shape: (out_channels, in_channels, kH, kW)
+                out_channels, in_channels = module.weight.data.shape[:2]
+                unpruned_dim0 = get_unpruned_indices(out_channels, pruned_dim0)
+                unpruned_dim1 = get_unpruned_indices(in_channels, pruned_dim1)
+
+                # Slice out those unpruned channels
+                w = module.weight.data  # shape [outC, inC, kH, kW]
+                unpruned_w = w[unpruned_dim0][:, unpruned_dim1, :, :].clone()
+
+            elif isinstance(module, nn.Linear):
+                # Weight shape: (out_features, in_features)
+                out_features, in_features = module.weight.data.shape
+                unpruned_dim0 = get_unpruned_indices(out_features, pruned_dim0)
+                unpruned_dim1 = get_unpruned_indices(in_features, pruned_dim1)
+
+                # Slice out those unpruned channels
+                w = module.weight.data  # shape [outF, inF]
+                unpruned_w = w[unpruned_dim0][:, unpruned_dim1].clone()
+
+            else:
+                # If not Conv2d or Linear, skip or handle differently
+                continue
 
             # Store results
-            unpruned_info[name] = {'unpruned_dim0': unpruned_out, 'unpruned_dim1': unpruned_in}
-            num_unpruned_channels[name] = (len(unpruned_out), len(unpruned_in))
-
-            # Extract weights for unpruned indices
-            if isinstance(module, torch.nn.Conv2d):
-                unpruned_weights[name] = module.weight.data[unpruned_out][:, unpruned_in, :, :].clone()
-            elif isinstance(module, torch.nn.Linear):
-                unpruned_weights[name] = module.weight.data[unpruned_out][:, unpruned_in].clone()
+            unpruned_info[name] = {
+                "unpruned_dim0": unpruned_dim0,
+                "unpruned_dim1": unpruned_dim1
+            }
+            num_unpruned_channels[name] = (len(unpruned_dim0), len(unpruned_dim1))
+            unpruned_weights[name] = unpruned_w
 
     print("num unpruned channels", num_unpruned_channels)
     return unpruned_info, num_unpruned_channels, unpruned_weights
+
 
 def get_pruned_info(groups, original_model, layers_to_prune):
     """
@@ -633,61 +677,143 @@ def get_core_weights(pruned_model, unpruned_weights):
             unpruned_weights[name] = module.weight.data
 
 
+# class ResNet_general(nn.Module):
+#     def __init__(self, block, num_blocks, channel_dict):
+#         super(ResNet_general, self).__init__()
+        
+#         print("CHANNEL DICT", channel_dict)
+#         self.in_channels = channel_dict['conv1'][0]
+#         self.conv1 = nn.Conv2d(channel_dict['conv1'][1], channel_dict['conv1'][0], kernel_size=3, padding=1, bias=False)
+#         self.bn1 = nn.BatchNorm2d(channel_dict['conv1'][0])
+#         self.layer1 = self._make_layer(block, channel_dict['layer1.0.conv1'][0], num_blocks[0])
+#         self.layer2 = self._make_layer(block, channel_dict['layer2.0.conv1'][0], num_blocks[1], stride=2)
+#         self.layer3 = self._make_layer(block, channel_dict['layer3.0.conv1'][0], num_blocks[2], stride=2)
+#         self.fc = nn.Linear(channel_dict['layer3.2.conv2'][0], 10)
+
+#     def _make_layer(self, block, out_channels, blocks, stride=1):
+#         layers = []
+#         layers.append(block(self.in_channels, out_channels))
+#         self.in_channels = out_channels
+#         for _ in range(1, blocks):
+#             layers.append(block(out_channels, out_channels))
+#         return nn.Sequential(*layers)
+
+#     def forward(self, x):
+#         out = F.relu(self.bn1(self.conv1(x)))
+#         out = self.layer1(out)
+#         out = self.layer2(out)
+#         out = self.layer3(out)
+#         out = F.adaptive_avg_pool2d(out,(1, 1))
+#         out = out.view(out.size(0), -1)
+#         out = self.fc(out)
+#         return out
+
+# def Resnet_General(channel_dict):
+#         return ResNet_general(BasicBlock, [3,3,3], channel_dict)
+            
+# class BasicBlock(nn.Module):
+#     def __init__(self, in_channels, out_channels):
+#         super(BasicBlock, self).__init__()
+#         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
+#         self.bn1 = nn.BatchNorm2d(out_channels)
+#         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
+#         self.bn2 = nn.BatchNorm2d(out_channels)
+
+#         self.downsample = nn.Sequential()
+#         if in_channels != out_channels:
+#             self.downsample = nn.Sequential(
+#                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
+#                 nn.BatchNorm2d(out_channels)
+#             )
+
+#     def forward(self, x):
+#         out = F.relu(self.bn1(self.conv1(x)))
+#         out = self.bn2(self.conv2(out))
+#         out += self.downsample(x)
+#         out = F.relu(out)
+#         return out
+
+class BasicBlock(nn.Module):
+    def __init__(self, in_channels, mid_channels, out_channels, stride=1):
+        super(BasicBlock, self).__init__()
+        
+        # Apply stride to conv1 (to reduce spatial size if stride=2)
+        self.conv1 = nn.Conv2d(in_channels, mid_channels, kernel_size=3,
+                               stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(mid_channels)
+
+        # Conv2 always has stride=1 (does not change spatial resolution)
+        self.conv2 = nn.Conv2d(mid_channels, out_channels, kernel_size=3,
+                               stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+
+        # Downsample path (only applies when stride=2 or channels change)
+        self.downsample = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.downsample = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+
+    def forward(self, x):
+        residual = self.downsample(x)  # Apply downsample to residual path
+        out = F.relu(self.bn1(self.conv1(x)))  # Apply stride in conv1 if needed
+        out = self.bn2(self.conv2(out))  # Keep conv2 stride=1
+        out += residual  # Make sure shapes match
+        return F.relu(out)
+
+    
 class ResNet_general(nn.Module):
     def __init__(self, block, num_blocks, channel_dict):
         super(ResNet_general, self).__init__()
-        
-        print("CHANNEL DICT", channel_dict)
+
         self.in_channels = channel_dict['conv1'][0]
         self.conv1 = nn.Conv2d(channel_dict['conv1'][1], channel_dict['conv1'][0], kernel_size=3, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(channel_dict['conv1'][0])
-        self.layer1 = self._make_layer(block, channel_dict['layer1.0.conv1'][0], num_blocks[0])
-        self.layer2 = self._make_layer(block, channel_dict['layer2.0.conv1'][0], num_blocks[1], stride=2)
-        self.layer3 = self._make_layer(block, channel_dict['layer3.0.conv1'][0], num_blocks[2], stride=2)
-        self.fc = nn.Linear(channel_dict['layer3.2.conv2'][0], 10)
+        
+        # Pass `stride=2` for layer2 and layer3 (since they reduce resolution)
+        self.layer1 = self._make_layer(block, num_blocks[0], channel_dict, prefix='layer1', stride=1)
+        self.layer2 = self._make_layer(block, num_blocks[1], channel_dict, prefix='layer2', stride=2)
+        self.layer3 = self._make_layer(block, num_blocks[2], channel_dict, prefix='layer3', stride=2)
 
-    def _make_layer(self, block, out_channels, blocks, stride=1):
+        self.fc = nn.Linear(channel_dict['layer3.2.conv2'][0], 10)
+    
+    def _make_layer(self, block, num_blocks, channel_dict, prefix, stride=1):
         layers = []
-        layers.append(block(self.in_channels, out_channels))
-        self.in_channels = out_channels
-        for _ in range(1, blocks):
-            layers.append(block(out_channels, out_channels))
+        
+        for i in range(num_blocks):
+            conv1_key = f'{prefix}.{i}.conv1'
+            conv2_key = f'{prefix}.{i}.conv2'
+            downsample_key = f'{prefix}.{i}.downsample.0'  # Only if needed
+
+            in_channels = channel_dict[conv1_key][1]
+            mid_channels = channel_dict[conv1_key][0]
+            out_channels = channel_dict[conv2_key][0]
+
+            # Apply stride=2 for the first block in the layer (to reduce spatial size)
+            current_stride = stride if i == 0 else 1
+
+            layers.append(block(in_channels, mid_channels, out_channels, stride=current_stride))
+            
+            # Ensure in_channels is correctly updated for next block
+            in_channels = out_channels
+
         return nn.Sequential(*layers)
 
+
+    
     def forward(self, x):
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.layer1(out)
         out = self.layer2(out)
         out = self.layer3(out)
-        out = F.adaptive_avg_pool2d(out,(1, 1))
+        out = F.adaptive_avg_pool2d(out, (1, 1))
         out = out.view(out.size(0), -1)
         out = self.fc(out)
         return out
 
 def Resnet_General(channel_dict):
-        return ResNet_general(BasicBlock, [3,3,3], channel_dict)
-            
-class BasicBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(BasicBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-
-        self.downsample = nn.Sequential()
-        if in_channels != out_channels:
-            self.downsample = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
-                nn.BatchNorm2d(out_channels)
-            )
-
-    def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out += self.downsample(x)
-        out = F.relu(out)
-        return out
+    return ResNet_general(BasicBlock, [3, 3, 3], channel_dict)
 
 
 def calculate_last_conv_out_features(pruned_model, input_size=(1, 3, 224, 224)):
@@ -877,7 +1003,7 @@ def copy_weights_from_dict(pruned_model, unpruned_weights):
         if isinstance(module, nn.Conv2d) and name in unpruned_weights.keys():
             module.weight.data = unpruned_weights[name]
 
-def fine_tuner(model, train_loader, val_loader, device, fineTuningType, epochs, scheduler_type, patience=3, LR=1e-4):
+def fine_tuner(model, train_loader, val_loader, device, fineTuningType, epochs, scheduler_type, patience=5, LR=1e-4):
     
     model = model.to(device)
     # Define loss function and optimizer
