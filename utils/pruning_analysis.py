@@ -135,7 +135,7 @@ def high_level_pruner(original_model, model, device, pruning_percentage=0.2, lay
         importance=imp,
         # global_pruning=True,
         iterative_steps=iterative_steps,
-        pruning_ratio=0.5,
+        pruning_ratio=pruning_percentage,
         ignored_layers=ignored_layers,
     )
 
@@ -315,15 +315,12 @@ def get_unpruned_info_high_level(model, pruned_info):
     for name, module in model.named_modules():
         # If the module wasn't pruned at all in your workflow, you can optionally store "no prunes" or skip
         if name not in pruned_info:
-            print("INSIDE IF NOT IN PRUNED INFO")
             # By default, assume no pruning took place on this layer
             if isinstance(module, nn.Conv2d):
-                print("INSIDE IF NOT IN PRUNED INFO conv2d")
                 out_channels, in_channels = module.weight.data.shape[:2]
                 unpruned_dim0 = list(range(out_channels))
                 unpruned_dim1 = list(range(in_channels))
             elif isinstance(module, nn.Linear):
-                print("INSIDE IF NOT IN PRUNED INFO linear")
                 out_features, in_features = module.weight.data.shape
                 unpruned_dim0 = list(range(out_features))
                 unpruned_dim1 = list(range(in_features))
@@ -341,9 +338,7 @@ def get_unpruned_info_high_level(model, pruned_info):
             unpruned_weights[name] = module.weight.data.clone()
 
         else:
-            print("INSIDE ELSE")
             pruned_dim0 = pruned_info[name].get("pruned_dim0", [])
-            print("PRUNED DIM0 of layer ", name, pruned_dim0)
             pruned_dim1 = pruned_info[name].get("pruned_dim1", [])
 
             if isinstance(module, nn.Conv2d):
@@ -407,7 +402,6 @@ def get_pruned_info(groups, original_model, layers_to_prune):
     # Global storage to track pruned indices across ALL layers
     global_pruned_info = {layer_name: {'pruned_dim0': [], 'pruned_dim1': []} for layer_name in all_conv2d_channels}
 
-    print("GLOBAL PRUNED INFO initial dictionary", global_pruned_info)
     # Regular expression to extract layer names (after `=>`)
     pattern = re.compile(r"=> prune_(out|in)_channels on ([\w\d\.\-]+)")
 
@@ -426,15 +420,11 @@ def get_pruned_info(groups, original_model, layers_to_prune):
 
                 # Ensure the extracted layer is in `layers_to_prune`
                 if target_layer_name in all_conv2d_channels:
-                    print("TAGRET LAYER NAME", target_layer_name)
-                    print(f"🔍 Extracted Pruning: {pruning_type} on {target_layer_name}, Indices: {item.idxs}")
-
                     if pruning_type == "out":
                         global_pruned_info[target_layer_name]['pruned_dim0'].extend(item.idxs)
                     elif pruning_type == "in":
                         global_pruned_info[target_layer_name]['pruned_dim1'].extend(item.idxs)
 
-    print("GLOBAL PRUNED INFO after all steps dictionary", global_pruned_info)
     # Second pass: Apply pruning information to layers
     for layer_name, layer in module_dict.items():
         if layer_name not in all_conv2d_channels:  # Skip layers that aren't in layers_to_prune
@@ -863,8 +853,8 @@ def reconstruct_weights_from_dicts(model, pruned_indices, pruned_weights, unprun
     # Iterate through the model's state_dict to dynamically fetch layer shapes
     for name, layer in model.named_modules():
         if isinstance(layer, nn.Conv2d):
-            if layer is None and layer_name.startswith("model."):
-                layer_name = layer_name[len("model."):]
+            if layer is None and name.startswith("model."):
+                name = name[len("model."):]
             new_device = layer.weight.device
 
             #Check if the layer is present or not
@@ -875,6 +865,41 @@ def reconstruct_weights_from_dicts(model, pruned_indices, pruned_weights, unprun
             # Retrieve pruned and unpruned indices
             pruned_dim0, pruned_dim1 = pruned_indices[name].values()
             unpruned_dim0, unpruned_dim1 = unpruned_indices[name].values()
+
+            for i in range(len(pruned_dim0)):
+                out_idx = pruned_dim0[i]  # Output channel index
+                for j in range(len(pruned_dim1)):
+                    in_idx = pruned_dim1[j]  # Input channel index
+
+                    # Debug prints to verify shapes before access
+                    print(f"Layer: {name}, Out-Idx: {out_idx}, In-Idx: {in_idx}, "
+                        f"Pruned Weights Shape: {pruned_weights[name].shape}")
+
+                    # Check if index is out of bounds before assignment
+                    if out_idx >= pruned_weights[name].shape[0] or in_idx >= pruned_weights[name].shape[1]:
+                        print(f"ERROR: Out of bounds access at {name} -> ({out_idx}, {in_idx})")
+                        continue  # Skip the invalid index
+
+                    # Assign pruned weights safely
+                    layer.weight.data[out_idx, in_idx, :, :] = pruned_weights[name][i, j].to(new_device)
+
+            for i in range(len(unpruned_dim0)):
+                out_idx = unpruned_dim0[i]  # Output channel index
+                for j in range(len(unpruned_dim1)):
+                    in_idx = unpruned_dim1[j]  # Input channel index
+
+                    # Debug prints to verify shapes before access
+                    print(f"Layer: {name}, Out-Idx: {out_idx}, In-Idx: {in_idx}, "
+                        f"Unpruned Weights Shape: {unpruned_weights[name].shape}")
+
+                    # Check if index is out of bounds before assignment
+                    if out_idx >= unpruned_weights[name].shape[0] or in_idx >= unpruned_weights[name].shape[1]:
+                        print(f"ERROR: Out of bounds access at {name} -> ({out_idx}, {in_idx})")
+                        continue  # Skip the invalid index
+
+                    # Assign unpruned weights safely
+                    layer.weight.data[out_idx, in_idx, :, :] = unpruned_weights[name][i, j].to(new_device)
+
 
             # Skip if pruned_weights for this layer is empty
             if name not in pruned_weights or pruned_weights[name].numel() == 0:
@@ -1003,7 +1028,7 @@ def copy_weights_from_dict(pruned_model, unpruned_weights):
         if isinstance(module, nn.Conv2d) and name in unpruned_weights.keys():
             module.weight.data = unpruned_weights[name]
 
-def fine_tuner(model, train_loader, val_loader, device, fineTuningType, epochs, scheduler_type, patience=5, LR=1e-4):
+def fine_tuner(model, train_loader, val_loader, device, pruning_percentage, fineTuningType, epochs, scheduler_type, patience=5, LR=1e-4):
     
     model = model.to(device)
     # Define loss function and optimizer
@@ -1092,11 +1117,11 @@ def fine_tuner(model, train_loader, val_loader, device, fineTuningType, epochs, 
 
         # **Log Metrics to Weights & Biases**
         wandb.log({
-            f"{scheduler_type}{fineTuningType}/Train Loss": epoch_loss,
-            f"{scheduler_type}{fineTuningType}/Train Accuracy": epoch_accuracy,
-            f"{scheduler_type}{fineTuningType}/Validation Loss": val_loss,
-            f"{scheduler_type}{fineTuningType}/Validation Accuracy": val_accuracy,
-            f"{scheduler_type}{fineTuningType}/Learning Rate": current_lr,
+            f"{pruning_percentage}{scheduler_type}{fineTuningType}/Train Loss": epoch_loss,
+            f"{pruning_percentage}{scheduler_type}{fineTuningType}/Train Accuracy": epoch_accuracy,
+            f"{pruning_percentage}{scheduler_type}{fineTuningType}/Validation Loss": val_loss,
+            f"{pruning_percentage}{scheduler_type}{fineTuningType}/Validation Accuracy": val_accuracy,
+            f"{pruning_percentage}{scheduler_type}{fineTuningType}/Learning Rate": current_lr,
             "Epoch": epoch + 1
         })
 
@@ -1105,10 +1130,13 @@ def fine_tuner(model, train_loader, val_loader, device, fineTuningType, epochs, 
             best_val_loss = val_loss
             best_model_wts = copy.deepcopy(model.state_dict())  # Save best model
             patience_counter = 0  # Reset patience counter
+
+            torch.save(model.state_dict(), f"checkpoint_{pruning_percentage}_{scheduler_type}_{fineTuningType}_{LR}_{epoch+1}.pth")
+
         else:
             patience_counter += 1  # Increment counter if no improvement
             
-        print(f"Epoch [{epoch+1}/{epochs}], Scheduler: {scheduler_type}, "
+        print(f"Epoch [{epoch+1}/{epochs}], PruningPercentage: {pruning_percentage}, Scheduler: {scheduler_type}, "
           f"Train Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_accuracy:.4f}, "
           f"Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy:.2f}, "
           f"Learning Rate: {current_lr:.6f}")
