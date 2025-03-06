@@ -24,3 +24,6 @@ cd $SLURM_SUBMIT_DIR
 
 # Run your script
 python high_level_pruner.py
+
+
+#SBATCH --time=2-00:00:00   # D-HH:MM:SS

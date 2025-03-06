@@ -1,11 +1,3 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.optim.lr_scheduler import StepLR, ExponentialLR, CyclicLR, CosineAnnealingLR
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
-import torch.nn.utils.prune as prune
 import matplotlib.pyplot as plt
 
 # Data from the output
@@ -29,4 +21,3 @@ plt.legend(fontsize=12)
 
 # Show the plot
 plt.show()
-

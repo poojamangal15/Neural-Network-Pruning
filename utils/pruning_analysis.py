@@ -87,7 +87,7 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
             print(f"Pruning layer: {layer_name}")
             group.prune()
 
-        print("MODEL AFTER PRUNING:\n", model)
+        # print("MODEL AFTER PRUNING:\n", model)
     else:
         print("No valid pruning groups found. The model was not pruned.")
 
@@ -195,7 +195,7 @@ def high_level_pruner(original_model, model, device, pruning_percentage=0.2, lay
             # print("Pruned info of layer", pruned_info[layer_name])
         group.prune()    
 
-    print("num pruned info", num_pruned_channels)
+    # print("num pruned info", num_pruned_channels)
     unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info_high_level(original_model, pruned_info)
 
     pruned_and_unpruned_info = {"pruned_info": pruned_info, 
@@ -232,7 +232,6 @@ def soft_pruning(original_model, model, device, pruning_percentage=0.2, layer_pr
             ignored_layers.append(m)
 
     ignored_layers.append(model.conv1)
-    print("IGnored layers", ignored_layers)
 
     iterative_steps = 1
     pruner = tp.pruner.MagnitudePruner(
@@ -373,7 +372,7 @@ def get_unpruned_info_high_level(model, pruned_info):
             num_unpruned_channels[name] = (len(unpruned_dim0), len(unpruned_dim1))
             unpruned_weights[name] = unpruned_w
 
-    print("num unpruned channels", num_unpruned_channels)
+    # print("num unpruned channels", num_unpruned_channels)
     return unpruned_info, num_unpruned_channels, unpruned_weights
 
 
@@ -529,8 +528,8 @@ def get_unpruned_info(groups, original_model, pruned_info):
             print(f"    -> Not a Conv2d or Linear, skipping weight extraction for {layer_name}")
             unpruned_weights[layer_name] = None
 
-    print("\nnum pruned channels:", num_pruned_channels)
-    print("\nnum_unpruned_channels:", num_unpruned_channels)
+    # print("\nnum pruned channels:", num_pruned_channels)
+    # print("\nnum_unpruned_channels:", num_unpruned_channels)
 
     return unpruned_info, num_unpruned_channels, unpruned_weights
 
@@ -584,7 +583,7 @@ def get_pruned_indices_and_counts(model):
                 pruned_weights[name] = weights[pruned_dim0, :, :, :]
     
     # print(" pruned info", pruned_info)
-    print("num pruned channels", num_pruned_channels)
+    # print("num pruned channels", num_pruned_channels)
     return pruned_info, num_pruned_channels, pruned_weights
 
 def get_unpruned_indices_and_counts(model):
@@ -621,7 +620,7 @@ def get_unpruned_indices_and_counts(model):
             unpruned_weights[name] = weights[pruned_dim0][:,pruned_dim1,:,:]
                             
     # print("non pruned info", non_pruned_info)
-    print("num unpruned channels", num_unpruned_channels)
+    # print("num unpruned channels", num_unpruned_channels)
 
     return non_pruned_info, num_unpruned_channels, unpruned_weights
 
@@ -866,39 +865,39 @@ def reconstruct_weights_from_dicts(model, pruned_indices, pruned_weights, unprun
             pruned_dim0, pruned_dim1 = pruned_indices[name].values()
             unpruned_dim0, unpruned_dim1 = unpruned_indices[name].values()
 
-            for i in range(len(pruned_dim0)):
-                out_idx = pruned_dim0[i]  # Output channel index
-                for j in range(len(pruned_dim1)):
-                    in_idx = pruned_dim1[j]  # Input channel index
+            # for i in range(len(pruned_dim0)):
+            #     out_idx = pruned_dim0[i]  # Output channel index
+            #     for j in range(len(pruned_dim1)):
+            #         in_idx = pruned_dim1[j]  # Input channel index
 
-                    # Debug prints to verify shapes before access
-                    print(f"Layer: {name}, Out-Idx: {out_idx}, In-Idx: {in_idx}, "
-                        f"Pruned Weights Shape: {pruned_weights[name].shape}")
+            #         # Debug prints to verify shapes before access
+            #         print(f"Layer: {name}, Out-Idx: {out_idx}, In-Idx: {in_idx}, "
+            #             f"Pruned Weights Shape: {pruned_weights[name].shape}")
 
-                    # Check if index is out of bounds before assignment
-                    if out_idx >= pruned_weights[name].shape[0] or in_idx >= pruned_weights[name].shape[1]:
-                        print(f"ERROR: Out of bounds access at {name} -> ({out_idx}, {in_idx})")
-                        continue  # Skip the invalid index
+            #         # Check if index is out of bounds before assignment
+            #         if out_idx >= pruned_weights[name].shape[0] or in_idx >= pruned_weights[name].shape[1]:
+            #             print(f"ERROR: Out of bounds access at {name} -> ({out_idx}, {in_idx})")
+            #             continue  # Skip the invalid index
 
-                    # Assign pruned weights safely
-                    layer.weight.data[out_idx, in_idx, :, :] = pruned_weights[name][i, j].to(new_device)
+            #         # Assign pruned weights safely
+            #         layer.weight.data[out_idx, in_idx, :, :] = pruned_weights[name][i, j].to(new_device)
 
-            for i in range(len(unpruned_dim0)):
-                out_idx = unpruned_dim0[i]  # Output channel index
-                for j in range(len(unpruned_dim1)):
-                    in_idx = unpruned_dim1[j]  # Input channel index
+            # for i in range(len(unpruned_dim0)):
+            #     out_idx = unpruned_dim0[i]  # Output channel index
+            #     for j in range(len(unpruned_dim1)):
+            #         in_idx = unpruned_dim1[j]  # Input channel index
 
-                    # Debug prints to verify shapes before access
-                    print(f"Layer: {name}, Out-Idx: {out_idx}, In-Idx: {in_idx}, "
-                        f"Unpruned Weights Shape: {unpruned_weights[name].shape}")
+            #         # Debug prints to verify shapes before access
+            #         print(f"Layer: {name}, Out-Idx: {out_idx}, In-Idx: {in_idx}, "
+            #             f"Unpruned Weights Shape: {unpruned_weights[name].shape}")
 
-                    # Check if index is out of bounds before assignment
-                    if out_idx >= unpruned_weights[name].shape[0] or in_idx >= unpruned_weights[name].shape[1]:
-                        print(f"ERROR: Out of bounds access at {name} -> ({out_idx}, {in_idx})")
-                        continue  # Skip the invalid index
+            #         # Check if index is out of bounds before assignment
+            #         if out_idx >= unpruned_weights[name].shape[0] or in_idx >= unpruned_weights[name].shape[1]:
+            #             print(f"ERROR: Out of bounds access at {name} -> ({out_idx}, {in_idx})")
+            #             continue  # Skip the invalid index
 
-                    # Assign unpruned weights safely
-                    layer.weight.data[out_idx, in_idx, :, :] = unpruned_weights[name][i, j].to(new_device)
+            #         # Assign unpruned weights safely
+            #         layer.weight.data[out_idx, in_idx, :, :] = unpruned_weights[name][i, j].to(new_device)
 
 
             # Skip if pruned_weights for this layer is empty
