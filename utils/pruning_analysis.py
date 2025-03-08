@@ -119,7 +119,9 @@ def high_level_pruner(original_model, model, device, pruning_percentage=0.2, lay
     """
     example_inputs = torch.randn(1, 3, 224, 224, dtype=torch.float32, device=device)
     # Initialize Importance & Pruner
-    imp = tp.importance.MagnitudeImportance(p=2)
+    # imp = tp.importance.MagnitudeImportance(p=2)
+    imp = tp.importance.TaylorImportance()
+
 
     ignored_layers = []
 

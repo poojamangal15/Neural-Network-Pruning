@@ -19,7 +19,7 @@ def main(schedulers, lrs, epochs):
 
     device = get_device()
 
-    model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_resnet20", pretrained=True).to(device)
+    model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_vgg16_bn", pretrained=True).to(device)
     print("MODEL BEFORE PRUNING", model)
 
     # pruning_percentages = [0.3, 0.5, 0.7, 0.9]
