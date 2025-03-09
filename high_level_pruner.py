@@ -9,7 +9,7 @@ import torch.nn as nn
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model, count_parameters, model_size_in_mb
 # from utils.device_utils import get_device
-from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, Resnet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, high_level_pruner
+from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, Resnet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, high_level_pruner, high_level_prunerTaylor, hessian_based_pruner
 
 
 
@@ -127,11 +127,9 @@ def main(schedulers, lrs, epochs):
     wandb.finish()
 
 if __name__ == "__main__":
-    # schedulers = ['cosine']
-    schedulers = ['exponential', 'cyclic', 'Default']
+    schedulers = ['cosine']
     # schedulers = ['cosine', 'step', 'exponential', 'cyclic', 'Default']
-    lrs = [1e-2, 1e-3, 1e-4, 1e-5]
-    # lrs = [1e-5]
+    lrs = [1e-2, 1e-3]
     epochs = [100]
     model_name = "ResNet20"
 
