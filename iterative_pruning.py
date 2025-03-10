@@ -62,8 +62,8 @@ def iterative_depgraph_pruning(
         
 
         # 1) Prune
-        core_model, pruned_and_unpruned_info = prune_model(
-            original_model=prev_model.model,
+        core_model, pruned_and_unpruned_info = high_level_pruner(
+            original_model=prev_model,
             model=current_model,
             device=device,
             pruning_percentage=ratio
@@ -80,22 +80,22 @@ def iterative_depgraph_pruning(
         current_model = core_model
         prev_model = copy.deepcopy(core_model)
     
-    # 3) Fine tune
-    print(f"[Iterative] Fine-tuning pruned model for {fine_tune_epochs} epochs.")
-    # core_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=fine_tune_epochs, learning_rate=fine_tune_lr)
-    fine_tuner(core_model, train_dataloader, val_dataloader, device, epochs=15, scheduler_type=schedulers, LR=1e-4)
+        # 3) Fine tune
+        print(f"[Iterative] Fine-tuning pruned model for {fine_tune_epochs} epochs.")
+        # core_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=fine_tune_epochs, learning_rate=fine_tune_lr)
+        fine_tuner(core_model, train_dataloader, val_dataloader, device, ratio, fineTuningType = "pruning", epochs=fine_tune_epochs, scheduler_type="cosine", LR=fine_tune_lr)
 
-    # Evaluate after fine tuning
-    pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
-    pruned_model_size = model_size_in_mb(core_model)
-    pm_params = count_parameters(core_model)
+        # Evaluate after fine tuning
+        pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
+        pruned_model_size = model_size_in_mb(core_model)
+        pm_params = count_parameters(core_model)
 
-    iteration_results.append({
-            "step": f"forward_{i}",
-            "acc": pruned_accuracy,
-            "params": pruned_params,
-            "size_mb": pruned_model_size
-        })
+        iteration_results.append({
+                "step": f"forward_{i}",
+                "acc": pruned_accuracy,
+                "params": pruned_params,
+                "size_mb": pruned_model_size
+            })
 
     # 4) Rebuild logic
     if rebuild:
@@ -110,13 +110,9 @@ def iterative_depgraph_pruning(
             # print("NEW CHANNELS-------------->", new_channels)
             # new_channels = get_rebuild_channels(unprune_meta_data[step_idx]["num_unpruned_channels"], prune_meta_data[step_idx]["num_pruned_channels"])
 
-            last_conv_out, last_conv_shape = calculate_last_conv_out_features(model_state_prev.model)
-            print(f"Last Conv Out Features: {last_conv_out}")
-            print(f"Last Conv Shape: {last_conv_shape}")
-
             # b) Construct a fresh "AlexNet_General"
-            rebuilt_model = AlexNet_General(new_channels, last_conv_shape).to(device)
-            print("temp rebuilt", rebuilt_model)
+            rebuilt_model = Resnet_General(new_channels).to(device)
+            # print("temp rebuilt", rebuilt_model)
             # c) Copy core weights
             get_core_weights(model_state_pruned, unprune_meta_data[step_idx]["unpruned_weights"])
 
@@ -130,7 +126,7 @@ def iterative_depgraph_pruning(
             )
 
             # e) Freeze channels if needed
-            rebuilt_model = freeze_channels(rebuilt_model, unprune_meta_data[step_idx]["unpruned_info"])
+            # rebuilt_model = freeze_channels(rebuilt_model, unprune_meta_data[step_idx]["unpruned_info"])
             rebuilt_model = rebuilt_model.to(device).to(torch.float32)
             print("Rebuilt model----->", rebuilt_model)
             # f) Evaluate the newly rebuilt
@@ -141,7 +137,7 @@ def iterative_depgraph_pruning(
             # g) Fine-tune the rebuilt
             print("[Backward Rebuild] Fine-tuning rebuilt model...")
             # rebuilt_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=fine_tune_epochs, learning_rate=fine_tune_lr)
-            fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, epochs=15, scheduler_type=schedulers, LR=1e-4)
+            fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, ratio, fineTuningType="rebuild", epochs=fine_tune_epochs, scheduler_type='cosine', LR=fine_tune_lr)
 
             # h) Evaluate after fine-tune
             r_ft_acc = evaluate_model(rebuilt_model, test_dataloader, device)
@@ -170,7 +166,7 @@ def main():
     train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
 
     # Let's define some pruning ratios
-    iterative_ratios = [0.2, 0.4, 0.6] 
+    iterative_ratios = [0.2, 0.2, 0.2] 
 
     # Call the iterative pruning function
     results = iterative_depgraph_pruning(
@@ -180,8 +176,8 @@ def main():
         test_dataloader=test_dataloader,
         device=device,
         prune_ratios=iterative_ratios,
-        fine_tune_epochs=5,
-        fine_tune_lr=1e-4,
+        fine_tune_epochs=25,
+        fine_tune_lr=1e-3,
         rebuild=True
     )
 

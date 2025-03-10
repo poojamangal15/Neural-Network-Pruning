@@ -1,14 +1,14 @@
 #!/bin/bash
 
 #SBATCH --job-name=resNet                      # Job name
-#SBATCH --output=scripts/resNet_%j.out        # Standard output log
-#SBATCH --error=scripts/resNet_%j.err         # Standard error log
+#SBATCH --output=scripts/iterative_%j.out        # Standard output log
+#SBATCH --error=scripts/iterative_%j.err         # Standard error log
 #SBATCH --nodes=1                                # Number of nodes
 #SBATCH --ntasks=1                               # Number of tasks
 #SBATCH --cpus-per-task=8                        # Number of CPU cores per task
 #SBATCH --gres=gpu:a100:1                        # Request one A100 GPU
 #SBATCH --mem=120G                               # Memory pool
-#SBATCH --time=2-00:00:00                           # 2 days, 0 hours, 0 minutes, 0 seconds
+#SBATCH --time=0-12:00:00                           # 2 days, 0 hours, 0 minutes, 0 seconds
 #SBATCH --partition=gpu                          # GPU partition to submit to
 
 # Load modules
@@ -23,7 +23,7 @@ source venv/bin/activate
 cd $SLURM_SUBMIT_DIR
 
 # Run your script
-python high_level_pruner.py
+python iterative_pruning.py
 
 
 #SBATCH --time=2-00:00:00   # D-HH:MM:SS
