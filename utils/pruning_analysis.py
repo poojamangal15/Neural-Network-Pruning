@@ -1085,41 +1085,6 @@ def reconstruct_weights_from_dicts(model, pruned_indices, pruned_weights, unprun
             pruned_dim0, pruned_dim1 = pruned_indices[name].values()
             unpruned_dim0, unpruned_dim1 = unpruned_indices[name].values()
 
-            # for i in range(len(pruned_dim0)):
-            #     out_idx = pruned_dim0[i]  # Output channel index
-            #     for j in range(len(pruned_dim1)):
-            #         in_idx = pruned_dim1[j]  # Input channel index
-
-            #         # Debug prints to verify shapes before access
-            #         print(f"Layer: {name}, Out-Idx: {out_idx}, In-Idx: {in_idx}, "
-            #             f"Pruned Weights Shape: {pruned_weights[name].shape}")
-
-            #         # Check if index is out of bounds before assignment
-            #         if out_idx >= pruned_weights[name].shape[0] or in_idx >= pruned_weights[name].shape[1]:
-            #             print(f"ERROR: Out of bounds access at {name} -> ({out_idx}, {in_idx})")
-            #             continue  # Skip the invalid index
-
-            #         # Assign pruned weights safely
-            #         layer.weight.data[out_idx, in_idx, :, :] = pruned_weights[name][i, j].to(new_device)
-
-            # for i in range(len(unpruned_dim0)):
-            #     out_idx = unpruned_dim0[i]  # Output channel index
-            #     for j in range(len(unpruned_dim1)):
-            #         in_idx = unpruned_dim1[j]  # Input channel index
-
-            #         # Debug prints to verify shapes before access
-            #         print(f"Layer: {name}, Out-Idx: {out_idx}, In-Idx: {in_idx}, "
-            #             f"Unpruned Weights Shape: {unpruned_weights[name].shape}")
-
-            #         # Check if index is out of bounds before assignment
-            #         if out_idx >= unpruned_weights[name].shape[0] or in_idx >= unpruned_weights[name].shape[1]:
-            #             print(f"ERROR: Out of bounds access at {name} -> ({out_idx}, {in_idx})")
-            #             continue  # Skip the invalid index
-
-            #         # Assign unpruned weights safely
-            #         layer.weight.data[out_idx, in_idx, :, :] = unpruned_weights[name][i, j].to(new_device)
-
-
             # Skip if pruned_weights for this layer is empty
             if name not in pruned_weights or pruned_weights[name].numel() == 0:
                 # No pruned weights to assign
@@ -1152,6 +1117,70 @@ def reconstruct_weights_from_dicts(model, pruned_indices, pruned_weights, unprun
                 
     return model
                       
+def reconstruct_Global_weights_from_dicts(model, pruned_indices, pruned_weights, unpruned_indices, unpruned_weights, freezing=False):
+    """
+    Reconstruct weights for a model using pruned and unpruned indices and tensors.
+
+    Parameters:
+    - pruned_indices: dict, mapping layer names to (dim0_indices, dim1_indices) of pruned weights.
+    - pruned_weights: dict, mapping layer names to tensors of pruned weights.
+    - unpruned_indices: dict, mapping layer names to (dim0_indices, dim1_indices) of unpruned weights.
+    - unpruned_weights: dict, mapping layer names to tensors of unpruned weights.
+    - model: torch.nn.Module, the model to reconstruct weights for.
+
+    Returns:
+    - reconstructed_model: torch.nn.Module, the model with reconstructed weights.
+    """
+    new_unpruned_dim0_freeze_list = {}
+    new_unpruned_dim1_freeze_list = {}
+    # Iterate through the model's state_dict to dynamically fetch layer shapes
+    for name, layer in model.named_modules():
+        if isinstance(layer, nn.Conv2d):
+            new_device = layer.weight.device
+
+            # Retrieve pruned and unpruned indices
+            pruned_dim0, pruned_dim1 = pruned_indices[name].values()
+            unpruned_dim0, unpruned_dim1 = unpruned_indices[name].values()
+
+            # Combine and sort
+            combined_dim0 = sorted(pruned_dim0 + unpruned_dim0)
+            combined_dim1 = sorted(pruned_dim1 + unpruned_dim1)
+
+            # Find new indices for list1 and list2
+            new_pruned_dim0 = [combined_dim0.index(x) for x in pruned_dim0]
+            new_unpruned_dim0 = [combined_dim0.index(x) for x in unpruned_dim0]
+
+            new_pruned_dim1 = [combined_dim1.index(x) for x in pruned_dim1]
+            new_unpruned_dim1 = [combined_dim1.index(x) for x in unpruned_dim1]
+
+            new_unpruned_dim0_freeze_list[name] = new_unpruned_dim0
+            new_unpruned_dim1_freeze_list[name] = new_unpruned_dim1
+
+            # Assign pruned weights
+            for i in range(len(new_pruned_dim0)):
+                    out_idx = new_pruned_dim0[i]  # Output channel index
+                    for j in range(len(new_pruned_dim1)):
+                        in_idx = new_pruned_dim1[j]   # Input channel index
+                        layer.weight.data[out_idx, in_idx, :, :] = pruned_weights[name][i, j].to(new_device)
+
+            # Assign unpruned weights
+            for i in range(len(new_unpruned_dim0)):
+                    out_idx = new_unpruned_dim0[i]  # Output channel index
+                    for j in range(len(new_unpruned_dim1)):
+                        in_idx = new_unpruned_dim1[j]   # Input channel index
+                        layer.weight.data[out_idx, in_idx, :, :] = unpruned_weights[name][i, j].to(new_device)
+
+            # Channel Freezing --> NOT WORKING
+            if freezing:
+                for i in range(len(new_unpruned_dim0)):
+                        out_idx = new_unpruned_dim0[i]  # Output channel index
+                        for j in range(len(new_unpruned_dim1)):
+                            in_idx = new_unpruned_dim1[j]   # Input channel index
+                            layer.weight.data[out_idx, in_idx, :, :].requires_grad = False
+
+                print(name, layer.weight.requires_grad)
+                
+    return model, new_unpruned_dim0_freeze_list, new_unpruned_dim1_freeze_list
 
 def freeze_channels(model, channel_dict): 
     """
@@ -1247,6 +1276,25 @@ def copy_weights_from_dict(pruned_model, unpruned_weights):
         if isinstance(module, nn.Conv2d) and name in unpruned_weights.keys():
             module.weight.data = unpruned_weights[name]
 
+# More efficient in use of memory
+def zero_out_gradients_v2(model, dim0_indices, dim1_indices):
+    for name, layer in model.named_modules():
+        if isinstance(layer, nn.Conv2d) and layer.weight.grad is not None:
+            dim0_idx = torch.tensor(dim0_indices[name], dtype=torch.long, device=layer.weight.grad.device)
+            dim1_idx = torch.tensor(dim1_indices[name], dtype=torch.long, device=layer.weight.grad.device)
+
+            # Ensure indices are within valid range
+            dim0_idx = dim0_idx[dim0_idx < layer.weight.grad.shape[0]]
+            dim1_idx = dim1_idx[dim1_idx < layer.weight.grad.shape[1]]
+
+            # Create a grid of (dim0, dim1) combinations
+            grid_dim0, grid_dim1 = torch.meshgrid(dim0_idx, dim1_idx, indexing='ij')
+
+            # Zero out gradients at specified indices
+            with torch.no_grad():
+                layer.weight.grad[grid_dim0, grid_dim1, :, :] = 0
+
+
 def fine_tuner(model, train_loader, val_loader, device, pruning_percentage, fineTuningType, epochs, scheduler_type, patience=5, LR=1e-4):
     
     model = model.to(device)
@@ -1291,6 +1339,129 @@ def fine_tuner(model, train_loader, val_loader, device, pruning_percentage, fine
             loss = criterion(outputs, labels)
             
             loss.backward()
+            optimizer.step()
+            
+            train_loss += loss.item() * inputs.size(0)
+            _, predicted = torch.max(outputs, 1)
+            correct += (predicted == labels).sum().item()
+            total += labels.size(0)
+
+        # Calculate average loss and accuracy for the epoch
+        epoch_loss = train_loss / len(train_loader.dataset)
+        epoch_accuracy = correct / total
+        train_losses.append(epoch_loss)
+        train_accuracies.append(epoch_accuracy)
+        
+        # Step the scheduler and track learning rate
+        scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
+        lrs.append(current_lr)
+        
+        # Validation loop
+        model.eval()
+        val_loss = 0
+        correct = 0
+        total = 0
+
+        with torch.no_grad():
+            for images, labels in val_loader:
+                images, labels = images.to(device), labels.to(device)
+
+                # Forward pass
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+
+                # Accumulate validation metrics
+                val_loss += loss.item() * images.size(0)
+                _, predicted = outputs.max(1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+
+        val_loss /= total
+        val_accuracy = correct / total
+        val_losses.append(val_loss)
+        val_accuracies.append(val_accuracy)
+
+        # **Log Metrics to Weights & Biases**
+        wandb.log({
+            f"{pruning_percentage}{scheduler_type}{fineTuningType}/Train Loss": epoch_loss,
+            f"{pruning_percentage}{scheduler_type}{fineTuningType}/Train Accuracy": epoch_accuracy,
+            f"{pruning_percentage}{scheduler_type}{fineTuningType}/Validation Loss": val_loss,
+            f"{pruning_percentage}{scheduler_type}{fineTuningType}/Validation Accuracy": val_accuracy,
+            f"{pruning_percentage}{scheduler_type}{fineTuningType}/Learning Rate": current_lr,
+            "Epoch": epoch + 1
+        })
+
+        # Check for early stopping condition
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_model_wts = copy.deepcopy(model.state_dict())  # Save best model
+            patience_counter = 0  # Reset patience counter
+
+            torch.save(model.state_dict(), f"checkpoint_{pruning_percentage}_{scheduler_type}_{fineTuningType}_{LR}_{epoch+1}.pth")
+
+        else:
+            patience_counter += 1  # Increment counter if no improvement
+            
+        print(f"Epoch [{epoch+1}/{epochs}], PruningPercentage: {pruning_percentage}, Scheduler: {scheduler_type}, "
+          f"Train Loss: {epoch_loss:.4f}, Train Accuracy: {epoch_accuracy:.4f}, "
+          f"Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy:.2f}, "
+          f"Learning Rate: {current_lr:.6f}")
+          
+        # Early stopping check
+        if patience_counter >= patience:
+            print(f"Early stopping triggered! Restoring best model from epoch {epoch - patience + 1}.")
+            model.load_state_dict(best_model_wts)  # Restore best model weights
+            break  # Stop training
+
+    print("Fine-Tuning Complete")     
+    return model  # Return the best model
+
+def fine_tuner_zerograd(model, train_loader, val_loader, freeze_dim0, freeze_dim1, device, pruning_percentage, fineTuningType, epochs, scheduler_type, patience=5, LR=1e-4):
+    
+    model = model.to(device)
+    # Define loss function and optimizer
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=LR)
+    
+    # Define LR scheduler
+    if scheduler_type == 'step':
+        scheduler = StepLR(optimizer, step_size=50, gamma=0.1)
+    elif scheduler_type == 'exponential':
+        scheduler = ExponentialLR(optimizer, gamma=0.95)
+    elif scheduler_type == 'cyclic':
+        scheduler = CyclicLR(optimizer, base_lr=1e-6, max_lr=1e-3, step_size_up=20, mode='triangular2')
+    else:
+        scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
+
+    train_losses = []
+    train_accuracies = []
+    val_losses = []
+    val_accuracies = []
+    lrs = []  # To track learning rates
+
+    # Early stopping setup
+    best_val_loss = float('inf')
+    best_model_wts = copy.deepcopy(model.state_dict())
+    patience_counter = 0
+    
+    # Fine-tuning loop
+    for epoch in tqdm(range(epochs), desc="Epochs"):
+        model.train()
+        train_loss = 0.0
+        correct = 0
+        total = 0
+        
+        for inputs, labels in train_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            
+            optimizer.zero_grad()
+            
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            
+            loss.backward()
+            zero_out_gradients_v2(model, freeze_dim0, freeze_dim1)
             optimizer.step()
             
             train_loss += loss.item() * inputs.size(0)
