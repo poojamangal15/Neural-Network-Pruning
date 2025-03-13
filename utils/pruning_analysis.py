@@ -1033,6 +1033,24 @@ def copy_weights_from_dict(pruned_model, unpruned_weights):
         if isinstance(module, nn.Conv2d) and name in unpruned_weights.keys():
             module.weight.data = unpruned_weights[name]
 
+# More efficient in use of memory
+def zero_out_gradients_v2(model, dim0_indices, dim1_indices):
+    for name, layer in model.named_modules():
+        if isinstance(layer, nn.Conv2d) and layer.weight.grad is not None:
+            dim0_idx = torch.tensor(dim0_indices[name], dtype=torch.long, device=layer.weight.grad.device)
+            dim1_idx = torch.tensor(dim1_indices[name], dtype=torch.long, device=layer.weight.grad.device)
+
+            # Ensure indices are within valid range
+            dim0_idx = dim0_idx[dim0_idx < layer.weight.grad.shape[0]]
+            dim1_idx = dim1_idx[dim1_idx < layer.weight.grad.shape[1]]
+
+            # Create a grid of (dim0, dim1) combinations
+            grid_dim0, grid_dim1 = torch.meshgrid(dim0_idx, dim1_idx, indexing='ij')
+
+            # Zero out gradients at specified indices
+            with torch.no_grad():
+                layer.weight.grad[grid_dim0, grid_dim1, :, :] = 0
+                
 def fine_tuner(model, train_loader, val_loader, device, pruning_percentage, fineTuningType, epochs, scheduler_type, patience=5, LR=1e-4):
     
     model = model.to(device)
