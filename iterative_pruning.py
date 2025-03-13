@@ -83,19 +83,19 @@ def iterative_depgraph_pruning(
         # 3) Fine tune
         print(f"[Iterative] Fine-tuning pruned model for {fine_tune_epochs} epochs.")
         # core_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=fine_tune_epochs, learning_rate=fine_tune_lr)
-        fine_tuner(core_model, train_dataloader, val_dataloader, device, ratio, fineTuningType = "pruning", epochs=fine_tune_epochs, scheduler_type="cosine", LR=fine_tune_lr)
+    fine_tuner(core_model, train_dataloader, val_dataloader, device, ratio, fineTuningType = "pruning", epochs=fine_tune_epochs, scheduler_type="cosine", LR=fine_tune_lr)
 
-        # Evaluate after fine tuning
-        pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
-        pruned_model_size = model_size_in_mb(core_model)
-        pm_params = count_parameters(core_model)
+    # Evaluate after fine tuning
+    pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
+    pruned_model_size = model_size_in_mb(core_model)
+    pm_params = count_parameters(core_model)
 
-        iteration_results.append({
-                "step": f"forward_{i}",
-                "acc": pruned_accuracy,
-                "params": pruned_params,
-                "size_mb": pruned_model_size
-            })
+    iteration_results.append({
+            "step": f"forward_{i}",
+            "acc": pruned_accuracy,
+            "params": pruned_params,
+            "size_mb": pruned_model_size
+        })
 
     # 4) Rebuild logic
     if rebuild:
