@@ -9,12 +9,12 @@ import torch.nn as nn
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model, count_parameters, model_size_in_mb
 # from utils.device_utils import get_device
-from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, Resnet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, high_level_pruner
+from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, high_level_pruner, VGG_General
 
 
 
 def main(schedulers, lrs, epochs):
-    wandb.init(project='resNet_depGraph', name=f'LrChange{lrs}')
+    wandb.init(project='VGG_depGraph', name=f'firstRun{lrs}')
     wandb_logger = WandbLogger(log_model=False)
 
     device = get_device()
@@ -71,7 +71,7 @@ def main(schedulers, lrs, epochs):
 
         new_channels = extend_channels(core_model, pruned_and_unpruned_info["num_pruned_channels"])        
 
-        rebuilt_model = Resnet_General(new_channels).to(device)
+        rebuilt_model = VGG_General(new_channels).to(device)
         get_core_weights(core_model, pruned_and_unpruned_info["unpruned_weights"])
         rebuilt_model = reconstruct_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
         # rebuilt_model = freeze_channels(rebuilt_model, pruned_and_unpruned_info["unpruned_info"])
@@ -127,13 +127,13 @@ def main(schedulers, lrs, epochs):
     wandb.finish()
 
 if __name__ == "__main__":
-    # schedulers = ['cosine']
-    schedulers = ['exponential', 'cyclic', 'Default']
+    schedulers = ['cosine']
+    # schedulers = ['exponential', 'cyclic', 'Default']
     # schedulers = ['cosine', 'step', 'exponential', 'cyclic', 'Default']
-    lrs = [1e-2, 1e-3, 1e-4, 1e-5]
-    # lrs = [1e-5]
+    # lrs = [1e-2, 1e-3, 1e-4, 1e-5]
+    lrs = [1e-2, 1e-3]
     epochs = [100]
-    model_name = "ResNet20"
+    model_name = "VGG"
 
     for sch in schedulers:
         for lr in lrs:

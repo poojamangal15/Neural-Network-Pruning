@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH --job-name=resNet                      # Job name
-#SBATCH --output=scripts/resNet_%j.out        # Standard output log
-#SBATCH --error=scripts/resNet_%j.err         # Standard error log
+#SBATCH --output=scripts/vgg_%j.out        # Standard output log
+#SBATCH --error=scripts/vgg_%j.err         # Standard error log
 #SBATCH --nodes=1                                # Number of nodes
 #SBATCH --ntasks=1                               # Number of tasks
 #SBATCH --cpus-per-task=8                        # Number of CPU cores per task

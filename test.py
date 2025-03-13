@@ -1,23 +1,36 @@
 import matplotlib.pyplot as plt
 
-# Data from the output
-iterations = [31250000, 62500000, 125000000, 250000000, 500000000, 1000000000, 2000000000]
-execution_times = [0.038078, 0.079033, 0.152449, 0.279447, 0.561927, 1.103204, 2.241537]
+# Data from the iterative pruning results
+steps = ["original", "forward_3", "backward_3", "backward_2", "backward_1"]
+accuracy = [0.9016, 0.7755, 0.7551, 0.7623, 0.7839]
+params = [272474, 72932, 110840, 174504, 272474]
+size_mb = [1.0786, 0.3151, 0.4624, 0.7065, 1.0786]
 
-# Create the plot with annotations in millions
-plt.figure(figsize=(10, 6))
-plt.plot(iterations, execution_times, marker='o', linestyle='-', label='Execution Time')
+# Create the plots
+fig, axs = plt.subplots(3, 1, figsize=(10, 12))
 
-# Adding annotations for each point in millions
-for x, y in zip(iterations, execution_times):
-    plt.text(x, y, f'{x//1_000_000}M', fontsize=9, ha='right', va='bottom')
+# Accuracy Progression Over Steps
+axs[0].plot(steps, accuracy, marker='o', color='blue', linestyle='-', label='Accuracy')
+axs[0].set_ylabel("Accuracy")
+axs[0].set_title("Accuracy Progression Over Pruning Steps")
+axs[0].grid(True)
+axs[0].legend()
 
-# Adding labels and title
-plt.xlabel('Number of Iterations (niter)', fontsize=12)
-plt.ylabel('Execution Time (seconds)', fontsize=12)
-plt.title('Execution Time vs. Number of Iterations', fontsize=14)
-plt.grid(True)
-plt.legend(fontsize=12)
+# Parameter Count Over Steps
+axs[1].plot(steps, params, marker='o', color='red', linestyle='-', label='Parameters')
+axs[1].set_ylabel("Number of Parameters")
+axs[1].set_title("Parameter Count Over Pruning Steps")
+axs[1].grid(True)
+axs[1].legend()
 
-# Show the plot
+# Model Size Over Steps
+axs[2].plot(steps, size_mb, marker='o', color='green', linestyle='-', label='Model Size (MB)')
+axs[2].set_xlabel("Pruning Steps")
+axs[2].set_ylabel("Model Size (MB)")
+axs[2].set_title("Model Size Over Pruning Steps")
+axs[2].grid(True)
+axs[2].legend()
+
+# Adjust layout and show plots
+plt.tight_layout()
 plt.show()

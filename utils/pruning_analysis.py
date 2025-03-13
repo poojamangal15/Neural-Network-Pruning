@@ -117,10 +117,10 @@ def high_level_pruner(original_model, model, device, pruning_percentage=0.2, lay
         - pruned_model (nn.Module): The pruned PyTorch model.
         - pruned_info (dict): Dictionary containing pruned indices.
     """
-    example_inputs = torch.randn(1, 3, 224, 224, dtype=torch.float32, device=device)
+    example_inputs = torch.randn(1, 3, 32, 32, dtype=torch.float32, device=device)
     # Initialize Importance & Pruner
-    # imp = tp.importance.MagnitudeImportance(p=2)
-    imp = tp.importance.TaylorImportance()
+    imp = tp.importance.MagnitudeImportance(p=2)
+    # imp = tp.importance.TaylorImportance()
 
 
     ignored_layers = []
@@ -128,7 +128,7 @@ def high_level_pruner(original_model, model, device, pruning_percentage=0.2, lay
     for m in model.modules():
         if isinstance(m, torch.nn.Linear) and m.out_features == 10:
             ignored_layers.append(m)
-    ignored_layers.append(model.conv1)
+    ignored_layers.append(model.features[0])
 
     iterative_steps = 1
     pruner = tp.pruner.MagnitudePruner(
@@ -197,6 +197,7 @@ def high_level_pruner(original_model, model, device, pruning_percentage=0.2, lay
             # print("Pruned info of layer", pruned_info[layer_name])
         group.prune()    
 
+    print("Pruning complete")
     # print("num pruned info", num_pruned_channels)
     unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info_high_level(original_model, pruned_info)
 
@@ -724,87 +725,90 @@ def get_core_weights(pruned_model, unpruned_weights):
 #         out = F.relu(out)
 #         return out
 
-class BasicBlock(nn.Module):
-    def __init__(self, in_channels, mid_channels, out_channels, stride=1):
-        super(BasicBlock, self).__init__()
+
+class VGG(nn.Module):
+
+    """
+        Generalized VGG model.
         
-        # Apply stride to conv1 (to reduce spatial size if stride=2)
-        self.conv1 = nn.Conv2d(in_channels, mid_channels, kernel_size=3,
-                               stride=stride, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(mid_channels)
+        Args:
+        - conv_config: A dictionary where each key is the block number (1-indexed) and the value
+                       is a list of integers representing the number of filters in each conv layer.
+        - num_classes: Number of output classes for the classifier.
+        - input_channels: Number of input channels (e.g., 3 for RGB images).
+        """
 
-        # Conv2 always has stride=1 (does not change spatial resolution)
-        self.conv2 = nn.Conv2d(mid_channels, out_channels, kernel_size=3,
-                               stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels)
+    def __init__(
+        self,
+        conv_config,
+        num_classes: int = 10,
+        init_weights: bool = False,
+        input_channels=3
+    ) -> None:
+        super(VGG, self).__init__()
+        self.features = self._make_layers(conv_config, input_channels)
+        self.classifier = nn.Sequential(
+            nn.Linear(conv_config[list(conv_config.keys())[-1]][-1], 512),
+            nn.ReLU(True),
+            nn.Dropout(),
+            nn.Linear(512, 512),
+            nn.ReLU(True),
+            nn.Dropout(),
+            nn.Linear(512, num_classes),
+        )
+        if init_weights:
+            self._initialize_weights()
 
-        # Downsample path (only applies when stride=2 or channels change)
-        self.downsample = nn.Sequential()
-        if stride != 1 or in_channels != out_channels:
-            self.downsample = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(out_channels)
-            )
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.features(x)
+        x = torch.flatten(x, 1)
+        x = self.classifier(x)
+        return x
 
-    def forward(self, x):
-        residual = self.downsample(x)  # Apply downsample to residual path
-        out = F.relu(self.bn1(self.conv1(x)))  # Apply stride in conv1 if needed
-        out = self.bn2(self.conv2(out))  # Keep conv2 stride=1
-        out += residual  # Make sure shapes match
-        return F.relu(out)
-
-    
-class ResNet_general(nn.Module):
-    def __init__(self, block, num_blocks, channel_dict):
-        super(ResNet_general, self).__init__()
-
-        self.in_channels = channel_dict['conv1'][0]
-        self.conv1 = nn.Conv2d(channel_dict['conv1'][1], channel_dict['conv1'][0], kernel_size=3, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(channel_dict['conv1'][0])
-        
-        # Pass `stride=2` for layer2 and layer3 (since they reduce resolution)
-        self.layer1 = self._make_layer(block, num_blocks[0], channel_dict, prefix='layer1', stride=1)
-        self.layer2 = self._make_layer(block, num_blocks[1], channel_dict, prefix='layer2', stride=2)
-        self.layer3 = self._make_layer(block, num_blocks[2], channel_dict, prefix='layer3', stride=2)
-
-        self.fc = nn.Linear(channel_dict['layer3.2.conv2'][0], 10)
-    
-    def _make_layer(self, block, num_blocks, channel_dict, prefix, stride=1):
+    def _make_layers(self, conv_config, input_channels):
         layers = []
-        
-        for i in range(num_blocks):
-            conv1_key = f'{prefix}.{i}.conv1'
-            conv2_key = f'{prefix}.{i}.conv2'
-            downsample_key = f'{prefix}.{i}.downsample.0'  # Only if needed
-
-            in_channels = channel_dict[conv1_key][1]
-            mid_channels = channel_dict[conv1_key][0]
-            out_channels = channel_dict[conv2_key][0]
-
-            # Apply stride=2 for the first block in the layer (to reduce spatial size)
-            current_stride = stride if i == 0 else 1
-
-            layers.append(block(in_channels, mid_channels, out_channels, stride=current_stride))
-            
-            # Ensure in_channels is correctly updated for next block
-            in_channels = out_channels
-
+        for block_idx, filters in conv_config.items():
+            for out_channels in filters:
+                layers.append(nn.Conv2d(input_channels, out_channels, kernel_size=3, padding=1))
+                layers.append(nn.BatchNorm2d(out_channels))
+                layers.append(nn.ReLU(inplace=True))
+                input_channels = out_channels  # Update input channels for next layer
+            layers.append(nn.MaxPool2d(kernel_size=2, stride=2))  # Add max pooling after each block
         return nn.Sequential(*layers)
 
+    def _initialize_weights(self) -> None:
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+                nn.init.constant_(m.bias, 0)
 
-    
-    def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = self.layer1(out)
-        out = self.layer2(out)
-        out = self.layer3(out)
-        out = F.adaptive_avg_pool2d(out, (1, 1))
-        out = out.view(out.size(0), -1)
-        out = self.fc(out)
-        return out
+def VGG_General(channel_dict, variant="VGG16"):
 
-def Resnet_General(channel_dict):
-    return ResNet_general(BasicBlock, [3, 3, 3], channel_dict)
+    conv_config = {}
+    current_block = 1
+    block_layers = []
+
+    # Sort keys numerically for proper order
+    sorted_keys = sorted(channel_dict.keys(), key=lambda x: int(x.split('.')[1]))
+
+    for key in sorted_keys:
+        out_channels, in_channels = channel_dict[key]
+        block_layers.append(out_channels)
+
+        # Determine block boundaries based on VGG pooling structure
+        if key.endswith(('3', '10', '20', '30', '40') ):  # End of a block
+            conv_config[current_block] = block_layers
+            current_block += 1
+            block_layers = []
+
+    return VGG(conv_config)
 
 
 def calculate_last_conv_out_features(pruned_model, input_size=(1, 3, 224, 224)):

@@ -5,7 +5,7 @@ from torch.utils.data import random_split, DataLoader
 def load_data(data_dir='./data', batch_size=32, val_split=0.2):
     # Data transformations for training
     train_transform = Compose([
-        Resize((224, 224)),
+        Resize((32, 32)),
         RandomHorizontalFlip(p=0.5),
         RandomRotation(degrees=15),
         ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
@@ -15,7 +15,7 @@ def load_data(data_dir='./data', batch_size=32, val_split=0.2):
 
     # Data transformations for validation/test
     test_transform = Compose([
-        Resize((224, 224)),
+        Resize((32, 32)),
         ToTensor(),
         Normalize(mean=[0.485, 0.456, 0.406],
                   std=[0.229, 0.224, 0.225])
