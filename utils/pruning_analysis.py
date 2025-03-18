@@ -56,6 +56,10 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
                 return None
 
             pruning_count = int(channel_norms.size(0) * percentage)
+            # Ensure at least 1 channel remains
+            max_prune = channel_norms.size(0) - 1  
+            pruning_count = min(pruning_count, max_prune)  # Never prune all channels
+
             if pruning_count == 0:
                 return []
             _, prune_indices = torch.topk(channel_norms, pruning_count, largest=False)
@@ -120,14 +124,13 @@ def high_level_pruner(original_model, model, device, pruning_percentage=0.2, lay
     example_inputs = torch.randn(1, 3, 224, 224, dtype=torch.float32, device=device)
     # Initialize Importance & Pruner
     imp = tp.importance.MagnitudeImportance(p=2)
-    # imp = tp.importance.TaylorImportance()
 
     ignored_layers = []
 
     for m in model.modules():
         if isinstance(m, torch.nn.Linear) and m.out_features == 10:
             ignored_layers.append(m)
-    ignored_layers.append(model.conv1)
+    # ignored_layers.append(model.conv1)
 
     iterative_steps = 1
     pruner = tp.pruner.MagnitudePruner(
@@ -233,7 +236,7 @@ def high_level_prunerTaylor(original_model, model, device, pruning_percentage=0.
     for m in model.modules():
         if isinstance(m, torch.nn.Linear) and m.out_features == 10:
             ignored_layers.append(m)
-    ignored_layers.append(model.conv1)
+    # ignored_layers.append(model.conv1)
 
     iterative_steps = 1
     pruner = tp.pruner.MagnitudePruner(
@@ -313,88 +316,113 @@ def high_level_prunerTaylor(original_model, model, device, pruning_percentage=0.
 
     return model, pruned_and_unpruned_info
 
-import torch
-import torch.nn as nn
-import torch_pruning as tp
 
-def hessian_based_pruner(original_model, model, device, pruning_percentage=0.2):
+def compute_hessian(loss, model, scale_factor=1e3):
     """
-    Prunes the model using Torch-Pruning's Hessian Importance Pruner.
-
-    Parameters:
-        - original_model (nn.Module): The unpruned reference model.
-        - model (nn.Module): The PyTorch model to be pruned.
-        - device (torch.device): The computing device.
-        - pruning_percentage (float): Percentage of channels to prune.
-
+    Computes an approximation of the Hessian for each trainable parameter in the model.
+    - Skips parameters without gradients.
+    - Multiplies the Hessian by a scale factor to amplify differences.
+    
     Returns:
-        - pruned_model (nn.Module): The pruned PyTorch model.
-        - pruned_info (dict): Dictionary containing pruned indices.
+        hessian_dict: Dictionary mapping parameter names to their approximated Hessian.
     """
-    model.train()  # Ensure model is in training mode for gradients
+    hessian_dict = {}
+    for name, param in model.named_parameters():
+        if param.requires_grad and param.grad is not None:
+            try:
+                # Compute Hessian for the current parameter using torch.autograd.functional.hessian.
+                # We use allow_unused=True to avoid errors when a parameter doesn't contribute directly.
+                hess_matrix = torch.autograd.functional.hessian(
+                    lambda x: torch.autograd.grad(loss, [x], retain_graph=True, allow_unused=True)[0].sum()
+                    if torch.autograd.grad(loss, [x], retain_graph=True, allow_unused=True)[0] is not None
+                    else torch.tensor(0.0, device=loss.device),
+                    param
+                )
+                # Amplify Hessian values to improve discrimination
+                hess_matrix = hess_matrix * scale_factor
+                hessian_dict[name] = hess_matrix
+            except RuntimeError as e:
+                print(f"Skipping Hessian computation for {name} due to error: {e}")
+                continue
+    return hessian_dict
 
+def hessian_based_pruner(original_model, model, device, train_loader, pruning_percentage=0.2):
+    """
+    Prunes the model using Hessian-based Importance.
+    
+    This implementation:
+      - Computes Hessian approximations over a few mini-batches.
+      - Uses a scale factor to amplify the Hessian scores.
+      - Uses Torch-Pruning's MetaPruner for global, importance-based channel removal.
+    
+    Returns:
+        - pruned_model: The pruned model.
+        - pruned_and_unpruned_info: A dictionary containing pruned and unpruned indices and weights.
+    """
+    model.train()  # Ensure gradients are tracked
     example_inputs = torch.randn(1, 3, 224, 224, dtype=torch.float32, device=device)
 
-    # ✅ Switch to Hessian-based Importance (requires second-order gradients)
-    imp = tp.importance.HessianImportance()
+    # Use Hessian-based Importance
+    imp = tp.importance.HessianImportance()  # Use default settings (optionally add normalize or other args)
 
     ignored_layers = []
     for m in model.modules():
-        if isinstance(m, torch.nn.Linear) and m.out_features == 10:
+        if isinstance(m, nn.Linear) and m.out_features == 10:
             ignored_layers.append(m)
-    ignored_layers.append(model.conv1)
+    # Optionally, you may also ignore the first conv layer if desired:
+    # ignored_layers.append(model.conv1)
 
-    pruner = tp.pruner.MagnitudePruner(
+    # Use MetaPruner for global, importance-based pruning
+    pruner = tp.pruner.MetaPruner(
         model,
         example_inputs,
-        importance=imp,  # Hessian-based pruning
+        importance=imp,
         pruning_ratio=pruning_percentage,
         ignored_layers=ignored_layers,
     )
 
-    # ✅ **Step 1: Compute Hessian Approximation Before Pruning**
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    # --- Step 1: Compute Hessian Approximations ---
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
     criterion = nn.CrossEntropyLoss()
 
-    dummy_input = torch.randn(1, 3, 224, 224, dtype=torch.float32, device=device)
-    dummy_target = torch.tensor([0], dtype=torch.long, device=device)
+    # Use several mini-batches to obtain a more stable Hessian estimation.
+    for i, (inputs, targets) in enumerate(train_loader):
+        inputs, targets = inputs.to(device), targets.to(device)
+        optimizer.zero_grad()
+        output = model(inputs)
+        loss = criterion(output, targets)
+        loss.backward()  # Compute first-order gradients
+        if i == 3:  # After 3 mini-batches, compute Hessian approximations
+            hessian_info = compute_hessian(loss, model, scale_factor=1e3)
+            break
 
-    optimizer.zero_grad()
-    output = model(dummy_input)
-    loss = criterion(output, dummy_target)
+    # Attach Hessian info to parameters so the pruner can use it
+    for name, param in model.named_parameters():
+        if name in hessian_info:
+            param.hessian = hessian_info[name]
 
-    # ✅ Compute Hessian via second-order gradients
-    grads = torch.autograd.grad(loss, model.parameters(), create_graph=True)  # First-order gradients
-    hessian_grads = torch.autograd.grad(sum([g.pow(2).sum() for g in grads]), model.parameters())  # Second-order
-
-    # Store Hessian-based gradients
-    for param, hess in zip(model.parameters(), hessian_grads):
-        param.hessian = hess  # Attach Hessian information to each parameter
-
-    # ✅ **Step 2: Perform Pruning**
-    pruned_weights = {}
-    num_pruned_channels = {}
+    # --- Step 2: Perform Pruning ---
     pruned_info = {}
+    num_pruned_channels = {}
+    pruned_weights = {}
 
-    for group in pruner.step(interactive=True):  # Now Hessian information exists!
+    for group in pruner.step(interactive=True):
         for dep, idxs in group:
             target_layer = dep.target.module
             pruning_fn = dep.handler
 
-            # Get layer name
+            # Get the name of the layer
             layer_name = None
             for name, module in model.named_modules():
                 if module is target_layer:
                     layer_name = name
                     break
-
             if layer_name is None:
-                continue  # Skip if layer name is not found
-
+                continue
             if layer_name.startswith("model."):
                 layer_name = layer_name[len("model."):]
 
-            # Initialize storage format
+            # Initialize storage if needed (only for Conv2d)
             if layer_name not in pruned_info and isinstance(target_layer, nn.Conv2d):
                 pruned_info[layer_name] = {'pruned_dim0': [], 'pruned_dim1': []}
                 pruned_weights[layer_name] = torch.empty(0)
@@ -403,17 +431,17 @@ def hessian_based_pruner(original_model, model, device, pruning_percentage=0.2):
             if isinstance(target_layer, nn.Conv2d):
                 if pruning_fn in [tp.prune_conv_in_channels]:
                     pruned_info[layer_name]['pruned_dim1'].extend(idxs)
-                    num_pruned_channels[layer_name] = (num_pruned_channels[layer_name][0], len(pruned_info[layer_name]['pruned_dim1']))
+                    num_pruned_channels[layer_name] = (num_pruned_channels[layer_name][0],
+                                                       len(pruned_info[layer_name]['pruned_dim1']))
                     pruned_weights[layer_name] = target_layer.weight.data[:, idxs, :, :].clone()
-
                 elif pruning_fn in [tp.prune_conv_out_channels]:
                     pruned_info[layer_name]['pruned_dim0'].extend(idxs)
-                    num_pruned_channels[layer_name] = (len(pruned_info[layer_name]['pruned_dim0']), num_pruned_channels[layer_name][1])
+                    num_pruned_channels[layer_name] = (len(pruned_info[layer_name]['pruned_dim0']),
+                                                       num_pruned_channels[layer_name][1])
                     pruned_weights[layer_name] = target_layer.weight.data[idxs, :, :, :].clone()
-
         group.prune()
 
-    # Get unpruned information
+    # --- Step 3: Obtain Unpruned Information ---
     unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info_high_level(original_model, pruned_info)
 
     pruned_and_unpruned_info = {
@@ -426,6 +454,7 @@ def hessian_based_pruner(original_model, model, device, pruning_percentage=0.2):
     }
 
     return model, pruned_and_unpruned_info
+
 
 def soft_pruning(original_model, model, device, pruning_percentage=0.2, layer_pruning_percentages=None):
     """
@@ -451,7 +480,7 @@ def soft_pruning(original_model, model, device, pruning_percentage=0.2, layer_pr
         if isinstance(m, torch.nn.Linear) and m.out_features == 10:
             ignored_layers.append(m)
 
-    ignored_layers.append(model.conv1)
+    # ignored_layers.append(model.conv1)
 
     iterative_steps = 1
     pruner = tp.pruner.MagnitudePruner(
@@ -1138,6 +1167,11 @@ def reconstruct_Global_weights_from_dicts(model, pruned_indices, pruned_weights,
         if isinstance(layer, nn.Conv2d):
             new_device = layer.weight.device
 
+            #Check if the layer is present or not
+            if name not in pruned_indices or name not in unpruned_indices:
+                print(f"Layer {name} not pruned, skipping weight reconstruction.")
+                continue
+
             # Retrieve pruned and unpruned indices
             pruned_dim0, pruned_dim1 = pruned_indices[name].values()
             unpruned_dim0, unpruned_dim1 = unpruned_indices[name].values()
@@ -1279,6 +1313,9 @@ def copy_weights_from_dict(pruned_model, unpruned_weights):
 # More efficient in use of memory
 def zero_out_gradients_v2(model, dim0_indices, dim1_indices):
     for name, layer in model.named_modules():
+        # if name not in dim0_indices or name not in dim1_indices:
+        #         # print(f"Layer {name} not pruned, skipping weight reconstruction.")
+        #         continue
         if isinstance(layer, nn.Conv2d) and layer.weight.grad is not None:
             dim0_idx = torch.tensor(dim0_indices[name], dtype=torch.long, device=layer.weight.grad.device)
             dim1_idx = torch.tensor(dim1_indices[name], dtype=torch.long, device=layer.weight.grad.device)
@@ -1417,7 +1454,7 @@ def fine_tuner(model, train_loader, val_loader, device, pruning_percentage, fine
     print("Fine-Tuning Complete")     
     return model  # Return the best model
 
-def fine_tuner_zerograd(model, train_loader, val_loader, freeze_dim0, freeze_dim1, device, pruning_percentage, fineTuningType, epochs, scheduler_type, patience=5, LR=1e-4):
+def fine_tuner_zerograd(model, train_loader, val_loader, freeze_dim0, freeze_dim1, device, pruning_percentage, fineTuningType, epochs, scheduler_type, patience=25, LR=1e-4):
     
     model = model.to(device)
     # Define loss function and optimizer

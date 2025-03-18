@@ -13,7 +13,7 @@ from utils.pruning_analysis import get_device, prune_model, get_pruned_info, get
 
 
 def main(schedulers):
-    wandb.init(project='resnet20_depGraph', name='ResNet20_Prune_Run')
+    wandb.init(project='resnet20_depGraph', name='basic_dependency_epoch1')
     wandb_logger = WandbLogger(log_model=False)
 
     device = get_device()
@@ -21,7 +21,7 @@ def main(schedulers):
     model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_resnet20", pretrained=True).to(device)
     print("MODEL BEFORE PRUNING", model)
 
-    pruning_percentages = [0.2]
+    pruning_percentages = [0.5]
 
     metrics_pruned = {
         "pruning_percentage": [], "scheduler": [], "test_accuracy": [], "count_params": [], "model_size": []
@@ -45,6 +45,7 @@ def main(schedulers):
         core_model, pruned_and_unpruned_info = prune_model(model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
         core_model = core_model.to(device)
 
+        print("Core model", core_model)
         # Count parameters after pruning
         pruned_params = count_parameters(core_model)
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
@@ -59,7 +60,7 @@ def main(schedulers):
 
         # Fine-tune the pruned model using the method from DepGraphFineTuner
         print("Starting post-pruning fine-tuning of the pruned model...")
-        # fine_tuner(core_model, train_dataloader, val_dataloader, device, fineTuningType = "pruning", epochs=5, scheduler_type=schedulers, LR=1e-4)
+        fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "pruning", epochs=1, scheduler_type=schedulers, LR=1e-3)
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
 
         wandb.log({
@@ -90,7 +91,7 @@ def main(schedulers):
         })
 
         print("Starting post-rebuilding fine-tuning of the pruned model...")
-        # fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, fineTuningType="rebuild", epochs=5, scheduler_type=schedulers, LR=1e-4)
+        fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, fineTuningType="rebuild", epochs=1, scheduler_type=schedulers, LR=1e-3)
 
         rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
 

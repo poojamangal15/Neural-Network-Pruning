@@ -9,12 +9,12 @@ import torch.nn as nn
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model, count_parameters, model_size_in_mb
 # from utils.device_utils import get_device
-from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, Resnet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, high_level_pruner, high_level_prunerTaylor, hessian_based_pruner, reconstruct_Global_weights_from_dicts
+from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, Resnet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, high_level_pruner, high_level_prunerTaylor, hessian_based_pruner, reconstruct_Global_weights_from_dicts, fine_tuner_zerograd
 
 
 
 def main(schedulers, lrs, epochs):
-    wandb.init(project='resNet_depGraph', name=f'LrChange{lrs}')
+    wandb.init(project='resNet_depGraph', name=f'hessian_high_level')
     wandb_logger = WandbLogger(log_model=False)
 
     device = get_device()
@@ -44,7 +44,8 @@ def main(schedulers, lrs, epochs):
         print(f"Applying {pruning_percentage * 100}% pruning...")
         model_to_be_pruned = copy.deepcopy(model)
         # Prune the model
-        core_model, pruned_and_unpruned_info = high_level_pruner(model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
+        # core_model, pruned_and_unpruned_info = high_level_pruner(model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
+        core_model, pruned_and_unpruned_info = hessian_based_pruner(model, model_to_be_pruned, device, train_dataloader, pruning_percentage=pruning_percentage)
         core_model = core_model.to(device)
         print("core model", core_model)
         # torch.onnx.export(core_model, (torch.rand(1, 3, 32, 32).to(device),), "resNet_coreModel.onnx")
@@ -61,7 +62,7 @@ def main(schedulers, lrs, epochs):
         })
 
         print("Starting post-pruning fine-tuning of the pruned model...")
-        # fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "pruning", epochs=epochs, scheduler_type=schedulers, LR=lrs)
+        fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "pruning", epochs=epochs, scheduler_type=schedulers, LR=lrs)
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
 
         wandb.log({
@@ -90,7 +91,7 @@ def main(schedulers, lrs, epochs):
         })
 
         print("Starting post-rebuilding fine-tuning of the pruned model...")
-        # fine_tuner(rebuilt_model, train_dataloader, val_dataloader, freeze_dim0, freeze_dim1, device, pruning_percentage, fineTuningType="rebuild", epochs=epochs, scheduler_type=schedulers, LR=lrs)
+        fine_tuner_zerograd(rebuilt_model, train_dataloader, val_dataloader, freeze_dim0, freeze_dim1, device, pruning_percentage, fineTuningType="rebuild", epochs=epochs, scheduler_type=schedulers, LR=lrs)
 
         rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
 
@@ -130,7 +131,7 @@ def main(schedulers, lrs, epochs):
 if __name__ == "__main__":
     schedulers = ['cosine']
     # schedulers = ['cosine', 'step', 'exponential', 'cyclic', 'Default']
-    lrs = [1e-2, 1e-3]
+    lrs = [1e-3]
     epochs = [100]
     model_name = "ResNet20"
 
