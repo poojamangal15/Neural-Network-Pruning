@@ -14,7 +14,7 @@ from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, ge
 
 
 
-def main(schedulers):
+def main(schedulers, lrs, epochs):
     wandb.init(project='alexnet_depGraph', name='AlexNet_Prune_Run')
     wandb_logger = WandbLogger(log_model=False)
 
@@ -25,13 +25,13 @@ def main(schedulers):
     print("MODEL BEFORE PRUNING:\n", model.model)
 
     # pruning_percentages = [0.2, 0.4, 0.6, 0.8]
-    pruning_percentages = [0.2]
+    pruning_percentages = [0.5]
 
     metrics_pruned = {
-        "pruning_percentage": [], "scheduler": [], "test_accuracy": [], "count_params": [], "model_size": []
+        "pruning_percentage": [], "LR": [], "scheduler": [], "epochs" : [], "test_accuracy": [], "count_params": [], "model_size": []
     }
     metrics_rebuild = {
-        "pruning_percentage": [], "scheduler": [], "test_accuracy": [], "count_params": [], "model_size": []
+        "pruning_percentage": [], "LR": [], "scheduler": [], "epochs" : [], "test_accuracy": [], "count_params": [], "model_size": []
     }
 
     train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
@@ -62,7 +62,7 @@ def main(schedulers):
         })
 
         print("Starting post-pruning fine-tuning of the pruned model...")
-        fine_tuner(core_model, train_dataloader, val_dataloader, device, fineTuningType = "pruning", epochs=5, scheduler_type=schedulers, LR=1e-4)
+        fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "pruning", epochs=epochs, scheduler_type=schedulers, LR=lrs)
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
 
         wandb.log({
@@ -90,7 +90,7 @@ def main(schedulers):
         })
 
         print("Starting post-rebuilding fine-tuning of the pruned model...")
-        fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, fineTuningType="rebuild", epochs=5, scheduler_type=schedulers, LR=1e-4)
+        fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "rebuild", epochs=epochs, scheduler_type=schedulers, LR=lrs)
 
         rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
 
@@ -106,7 +106,8 @@ def main(schedulers):
             sum(p.numel() for p in core_model.parameters() if p.requires_grad)
         )
         metrics_pruned['model_size'].append(pruned_model_size)
-
+        metrics_pruned['LR'].append(lrs)
+        metrics_pruned['epochs'].append(epochs)
 
         metrics_rebuild["pruning_percentage"].append(pruning_percentage * 100)
         metrics_rebuild["scheduler"].append(schedulers)
@@ -115,6 +116,8 @@ def main(schedulers):
             sum(p.numel() for p in rebuilt_model.parameters() if p.requires_grad)
         )
         metrics_rebuild['model_size'].append(rebuild_model_size)
+        metrics_rebuild['LR'].append(lrs)
+        metrics_rebuild['epochs'].append(epochs)
 
 
         print("All Metrics for pruned model----------->", metrics_pruned)
@@ -126,6 +129,10 @@ def main(schedulers):
 
 if __name__ == "__main__":
     schedulers = ['cosine']
+    lrs = [1e-3, 1e-4]
+    epochs = [100]
     # schedulers = ['cosine', 'step', 'exponential', 'cyclic']
     for sch in schedulers:
-        main(schedulers=sch)
+        for lr in lrs:
+            for epoch in epochs:
+                main(schedulers=sch, lrs = lr, epochs = epoch)
