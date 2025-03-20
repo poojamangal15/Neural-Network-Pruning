@@ -9,25 +9,25 @@ import torch.nn as nn
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model, count_parameters, model_size_in_mb
 
-from utils.pruning_analysis import get_device, prune_model, get_pruned_info, get_unpruned_info, extend_channels, fine_tuner, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, Resnet_General
+from utils.pruning_analysis import get_device, prune_model, get_pruned_info, get_unpruned_info, extend_channels, fine_tuner, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, VGG_General
 
 
-def main(schedulers):
-    wandb.init(project='resnet20_depGraph', name='ResNet20_Prune_Run')
+def main(schedulers, lrs, epochs):
+    wandb.init(project='VGG_depgraph', name='VGG_depgraph')
     wandb_logger = WandbLogger(log_model=False)
 
     device = get_device()
 
-    model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_resnet20", pretrained=True).to(device)
+    model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_vgg16_bn", pretrained=True).to(device)
     print("MODEL BEFORE PRUNING", model)
 
-    pruning_percentages = [0.2]
+    pruning_percentages = [0.5]
 
     metrics_pruned = {
-        "pruning_percentage": [], "scheduler": [], "test_accuracy": [], "count_params": [], "model_size": []
+        "pruning_percentage": [], "LR": [], "scheduler": [], "epochs" : [], "test_accuracy": [], "count_params": [], "model_size": []
     }
     metrics_rebuild = {
-        "pruning_percentage": [], "scheduler": [], "test_accuracy": [], "count_params": [], "model_size": []
+        "pruning_percentage": [], "LR": [], "scheduler": [], "epochs" : [], "test_accuracy": [], "count_params": [], "model_size": []
     }
 
     train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
@@ -36,6 +36,18 @@ def main(schedulers):
     orig_accuracy = evaluate_model(model, test_dataloader, device)
     print("Initial accuracy", orig_accuracy)
     pruned_model_size = model_size_in_mb(model)
+
+    #  # Forward pass to check feature shape before the classifier
+    # with torch.no_grad():
+    #     example_inputs = torch.randn(1, 3, 224, 224, dtype=torch.float32, device=device)
+    #     feature_output = model.features(example_inputs)
+    #     flattened_size = feature_output.view(feature_output.size(0), -1).shape[1]  # Compute correct size
+
+    # # Modify classifier dynamically
+    # model.classifier[0] = nn.Linear(flattened_size, 512)  # Adjust input to classifier
+    # print(f"✅ Adjusted classifier input size to: {flattened_size}")
+    # print(model)
+
 
     for pruning_percentage in pruning_percentages:
         print(f"Applying {pruning_percentage * 100}% pruning...")
@@ -59,8 +71,7 @@ def main(schedulers):
 
         # Fine-tune the pruned model using the method from DepGraphFineTuner
         print("Starting post-pruning fine-tuning of the pruned model...")
-        # fine_tuner(core_model, train_dataloader, val_dataloader, device, fineTuningType = "pruning", epochs=5, scheduler_type=schedulers, LR=1e-4)
-        pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
+        fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "pruning", epochs=epochs, scheduler_type=schedulers, LR=lrs)
 
         wandb.log({
             "Pruning Percentage": pruning_percentage * 100,
@@ -69,9 +80,7 @@ def main(schedulers):
 
         new_channels = extend_channels(core_model, pruned_and_unpruned_info["num_pruned_channels"])
         
-        # last_conv_out_features, last_conv_shape = calculate_last_conv_out_features(model)
-
-        rebuilt_model = Resnet_General(new_channels).to(device)
+        rebuilt_model = VGG_General(new_channels).to(device)
         get_core_weights(core_model, pruned_and_unpruned_info["unpruned_weights"])
 
         rebuilt_model = reconstruct_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
@@ -90,7 +99,7 @@ def main(schedulers):
         })
 
         print("Starting post-rebuilding fine-tuning of the pruned model...")
-        # fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, fineTuningType="rebuild", epochs=5, scheduler_type=schedulers, LR=1e-4)
+        fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "pruning", epochs=epochs, scheduler_type=schedulers, LR=lrs)
 
         rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
 
@@ -106,7 +115,8 @@ def main(schedulers):
             sum(p.numel() for p in core_model.parameters() if p.requires_grad)
         )
         metrics_pruned['model_size'].append(pruned_model_size)
-
+        metrics_pruned['LR'].append(lrs)
+        metrics_pruned['epochs'].append(epochs)
 
         metrics_rebuild["pruning_percentage"].append(pruning_percentage * 100)
         metrics_rebuild["scheduler"].append(schedulers)
@@ -115,6 +125,8 @@ def main(schedulers):
             sum(p.numel() for p in rebuilt_model.parameters() if p.requires_grad)
         )
         metrics_rebuild['model_size'].append(rebuild_model_size)
+        metrics_rebuild['LR'].append(lrs)
+        metrics_rebuild['epochs'].append(epochs)
 
 
         print("All Metrics for pruned model----------->", metrics_pruned)
@@ -127,6 +139,14 @@ def main(schedulers):
 
 if __name__ == "__main__":
     schedulers = ['cosine']
-    # schedulers = ['cosine', 'step', 'exponential', 'cyclic']
+    # schedulers = ['exponential', 'cyclic', 'Default']
+    # schedulers = ['cosine', 'step', 'exponential', 'cyclic', 'Default']
+    # lrs = [1e-2, 1e-3, 1e-4, 1e-5]
+    lrs = [1e-2, 1e-3]
+    epochs = [100]
+    model_name = "VGG"
+
     for sch in schedulers:
-        main(schedulers=sch)
+        for lr in lrs:
+            for epoch in epochs:
+                 main(schedulers=sch, lrs=lr, epochs=epoch)
