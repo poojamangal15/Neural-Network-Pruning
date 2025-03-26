@@ -82,7 +82,6 @@ def iterative_depgraph_pruning(
     
         # 3) Fine tune
         print(f"[Iterative] Fine-tuning pruned model for {fine_tune_epochs} epochs.")
-        # core_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=fine_tune_epochs, learning_rate=fine_tune_lr)
         fine_tuner(core_model, train_dataloader, val_dataloader, device, ratio, fineTuningType = "pruning", epochs=fine_tune_epochs, scheduler_type="cosine", LR=fine_tune_lr)
 
         # Evaluate after fine tuning

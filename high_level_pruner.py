@@ -5,6 +5,7 @@ import wandb
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 import torch.nn as nn
+import torchvision.models as models
 
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model, count_parameters, model_size_in_mb
@@ -19,7 +20,9 @@ def main(schedulers, lrs, epochs):
 
     device = get_device()
 
-    model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_resnet20", pretrained=True).to(device)
+    # model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_resnet20", pretrained=True).to(device)
+    model = models.resnet50(pretrained=True).to(device)
+
     print("MODEL BEFORE PRUNING", model)
 
     # pruning_percentages = [0.3, 0.5, 0.7, 0.9]
@@ -44,8 +47,8 @@ def main(schedulers, lrs, epochs):
         print(f"Applying {pruning_percentage * 100}% pruning...")
         model_to_be_pruned = copy.deepcopy(model)
         # Prune the model
-        # core_model, pruned_and_unpruned_info = high_level_pruner(model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
-        core_model, pruned_and_unpruned_info = hessian_based_pruner(model, model_to_be_pruned, device, train_dataloader, pruning_percentage=pruning_percentage)
+        core_model, pruned_and_unpruned_info = high_level_pruner(model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
+        # core_model, pruned_and_unpruned_info = hessian_based_pruner(model, model_to_be_pruned, device, train_dataloader, pruning_percentage=pruning_percentage)
         core_model = core_model.to(device)
         print("core model", core_model)
         # torch.onnx.export(core_model, (torch.rand(1, 3, 32, 32).to(device),), "resNet_coreModel.onnx")
