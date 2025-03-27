@@ -24,8 +24,8 @@ cd $SLURM_SUBMIT_DIR
 
 # Run your script
 # python softPruning.py
-python high_level_pruner.py
-# python depGraph_pruning.py
+# python high_level_pruner.py
+python depGraph_pruning.py
 
 
 #SBATCH --time=2-00:00:00   # D-HH:MM:SS

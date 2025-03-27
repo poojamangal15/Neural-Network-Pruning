@@ -35,15 +35,15 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
     # ✅ Define Layers to Prune
     layers_to_prune = {
         "features.3": model.features[3],  # Conv2D layers
-        "features.7": model.features[7],
+        # "features.7": model.features[7],
         "features.10": model.features[10],
-        "features.14": model.features[14],
+        # "features.14": model.features[14],
         "features.17": model.features[17],
-        "features.20": model.features[20],
+        # "features.20": model.features[20],
         "features.24": model.features[24],
-        "features.27": model.features[27],
+        # "features.27": model.features[27],
         "features.30": model.features[30],
-        "features.34": model.features[34],
+        # "features.34": model.features[34],
         "features.37": model.features[37],
         # "features.40": model.features[40],
     }
@@ -75,7 +75,7 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
             continue
 
         group = DG.get_pruning_group(layer_module, prune_fn, idxs=pruning_idxs)
-        # print("group.details()", group.details()) 
+        print("group.details()", group.details()) 
 
         if DG.check_pruning_group(group):
             groups.append((layer_name, group))
