@@ -26,7 +26,7 @@ def main(schedulers, lrs, epochs):
     print("MODEL BEFORE PRUNING", model)
 
     # pruning_percentages = [0.3, 0.5, 0.7, 0.9]
-    pruning_percentages = [0.5]
+    pruning_percentages = [0.3]
 
     metrics_pruned = {
         "pruning_percentage": [], "LR": [], "scheduler": [], "epochs" : [], "test_accuracy": [], "count_params": [], "model_size": []
@@ -40,7 +40,7 @@ def main(schedulers, lrs, epochs):
     orig_params = count_parameters(model)
     orig_accuracy = evaluate_model(model, test_dataloader, device)
     print("Initial accuracy", orig_accuracy)
-    pruned_model_size = model_size_in_mb(model)
+    orig_model_size = model_size_in_mb(model)
 
 
     for pruning_percentage in pruning_percentages:
@@ -65,7 +65,7 @@ def main(schedulers, lrs, epochs):
         })
 
         print("Starting post-pruning fine-tuning of the pruned model...")
-        fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "pruning", epochs=epochs, scheduler_type=schedulers, LR=lrs)
+        # fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "pruning", epochs=epochs, scheduler_type=schedulers, LR=lrs)
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
 
         wandb.log({
@@ -84,7 +84,7 @@ def main(schedulers, lrs, epochs):
 
         print(rebuilt_model)
         
-        rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
+        # rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
         rebuild_model_size = model_size_in_mb(rebuilt_model)
 
         wandb.log({
@@ -94,7 +94,7 @@ def main(schedulers, lrs, epochs):
         })
 
         print("Starting post-rebuilding fine-tuning of the pruned model...")
-        fine_tuner_zerograd(rebuilt_model, train_dataloader, val_dataloader, freeze_dim0, freeze_dim1, device, pruning_percentage, fineTuningType="rebuild", epochs=epochs, scheduler_type=schedulers, LR=lrs)
+        # fine_tuner_zerograd(rebuilt_model, train_dataloader, val_dataloader, freeze_dim0, freeze_dim1, device, pruning_percentage, fineTuningType="rebuild", epochs=epochs, scheduler_type=schedulers, LR=lrs)
 
         rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
 
