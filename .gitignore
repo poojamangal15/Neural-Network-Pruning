@@ -19,7 +19,12 @@ depGraph/data/
 *.pth
 *.tar.gz
 cifar-10-batches-py/
+*.crdownload
+*.tar
 
 # Ignore Git temporary files
 .git/objects/
 venv/
+
+
+vision/

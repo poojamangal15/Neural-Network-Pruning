@@ -35,17 +35,17 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
     # ✅ Define Layers to Prune
     layers_to_prune = {
         "features.3": model.features[3],  # Conv2D layers
-        # "features.7": model.features[7],
+        "features.7": model.features[7],
         "features.10": model.features[10],
-        # "features.14": model.features[14],
+        "features.14": model.features[14],
         "features.17": model.features[17],
-        # "features.20": model.features[20],
+        "features.20": model.features[20],
         "features.24": model.features[24],
-        # "features.27": model.features[27],
+        "features.27": model.features[27],
         "features.30": model.features[30],
-        # "features.34": model.features[34],
+        "features.34": model.features[34],
         "features.37": model.features[37],
-        # "features.40": model.features[40],
+        "features.40": model.features[40],
     }
 
     # ✅ Compute Pruning Indices (L1 Norm)
@@ -58,7 +58,7 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
                 return []
             _, prune_indices = torch.topk(channel_norms, pruning_count, largest=False)
             return prune_indices.tolist()
-    # ✅ Adjust Feature Map Before Flattening
+
     model.features.add_module("adaptive_pool", torch.nn.AdaptiveAvgPool2d((1, 1)))
 
     groups = []
@@ -136,7 +136,7 @@ def high_level_pruner(original_model, model, device, pruning_percentage=0.2, lay
         model,
         example_inputs,
         importance=imp,
-        # global_pruning=True,
+        global_pruning=True,
         iterative_steps=iterative_steps,
         pruning_ratio=pruning_percentage,
         ignored_layers=ignored_layers,
@@ -195,11 +195,14 @@ def high_level_pruner(original_model, model, device, pruning_percentage=0.2, lay
             #         pruned_weights[layer_name] = target_layer.weight.data[idxs, :].clone()
         # print(group)
             # print("Layer name", layer_name)
-            # print("Pruned info of layer", pruned_info[layer_name])
+        
+        for name, values in pruned_weights:
+            print(pruned_weights[name].shape)
+        print("num prnued ifo", num_pruned_channels)
         group.prune()    
 
     print("Pruning complete")
-    # print("num pruned info", num_pruned_channels)
+
     unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info_high_level(original_model, pruned_info)
 
     pruned_and_unpruned_info = {"pruned_info": pruned_info, 
@@ -209,7 +212,116 @@ def high_level_pruner(original_model, model, device, pruning_percentage=0.2, lay
                                 "num_unpruned_channels": num_unpruned_channels, 
                                 "unpruned_weights": unpruned_weights}
     
+    print("Pruned info of layer", pruned_and_unpruned_info['num_pruned_channels'])
+    print("Unpruned info", pruned_and_unpruned_info['num_unpruned_channels'])
     return model, pruned_and_unpruned_info
+
+
+def high_level_pruner_new(original_model, model, device, pruning_percentage=0.2, layer_pruning_percentages=None):
+    example_inputs = torch.randn(1, 3, 32, 32, dtype=torch.float32, device=device)
+    imp = tp.importance.MagnitudeImportance(p=2)
+
+    ignored_layers = []
+    for m in model.modules():
+        if isinstance(m, torch.nn.Linear) and m.out_features == 10:
+            ignored_layers.append(m)
+
+    pruner = tp.pruner.MagnitudePruner(
+        model,
+        example_inputs,
+        importance=imp,
+        iterative_steps=1,
+        pruning_ratio=pruning_percentage,
+        ignored_layers=ignored_layers,
+    )
+
+    pruned_weights = {}
+    num_pruned_channels = {}
+    pruned_info = {}
+
+    for group in pruner.step(interactive=True):
+        for dep, idxs in group:
+            target_layer = dep.target.module
+            pruning_fn = dep.handler
+
+            # ✅ Get layer name
+            layer_name = None
+            for name, module in model.named_modules():
+                if module is target_layer:
+                    layer_name = name
+                    break
+            if layer_name is None:
+                continue
+            if layer_name.startswith("model."):
+                layer_name = layer_name[len("model."):]
+
+            # ✅ Get corresponding unpruned layer from original_model
+            original_layer = dict(original_model.named_modules())[layer_name]
+
+            if layer_name not in pruned_info and isinstance(target_layer, nn.Conv2d):
+                pruned_info[layer_name] = {'pruned_dim0': [], 'pruned_dim1': []}
+                pruned_weights[layer_name] = torch.empty(0)
+                num_pruned_channels[layer_name] = (0, 0)
+
+            if isinstance(target_layer, nn.Conv2d):
+                if pruning_fn in [tp.prune_conv_in_channels]:
+                    pruned_info[layer_name]['pruned_dim1'].extend(idxs)
+                    num_pruned_channels[layer_name] = (
+                        num_pruned_channels[layer_name][0], len(pruned_info[layer_name]['pruned_dim1'])
+                    )
+                    # ✅ Extract from original model (not mutated one)
+                    pruned_weights[layer_name] = original_layer.weight.data[:, idxs, :, :].clone()
+
+                elif pruning_fn in [tp.prune_conv_out_channels]:
+                    pruned_info[layer_name]['pruned_dim0'].extend(idxs)
+                    num_pruned_channels[layer_name] = (
+                        len(pruned_info[layer_name]['pruned_dim0']), num_pruned_channels[layer_name][1]
+                    )
+                    # ✅ Extract from original model
+                    pruned_weights[layer_name] = original_layer.weight.data[idxs, :, :, :].clone()
+
+        group.prune()  # Only prune after storing correct weights
+
+    print("Pruning complete")
+    print("num pruned info", num_pruned_channels)
+
+    layer_name = "features.3"
+
+    # Original full weight tensor (before pruning)
+    original_weight = original_model.features[3].weight.data.cpu()
+
+    # Your extracted pruned weights
+    extracted_weight = pruned_weights[layer_name].cpu()
+
+    # Indices you stored
+    pruned_dim0 = pruned_info[layer_name]["pruned_dim0"]
+    pruned_dim1 = pruned_info[layer_name]["pruned_dim1"]
+
+    # Compare the extracted weights with the true slices from the original
+    for i, out_idx in enumerate(pruned_dim0):
+        for j, in_idx in enumerate(pruned_dim1):
+            expected = original_weight[out_idx, in_idx]
+            actual = extracted_weight[i, j]
+            if not torch.allclose(expected, actual, atol=1e-6):
+                print(f"❌ Mismatch at out={out_idx}, in={in_idx} (expected vs actual):")
+                print(expected)
+                print(actual)
+            else:
+                print(f"✅ Match at out={out_idx}, in={in_idx}")
+
+    unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info_high_level(original_model, pruned_info)
+
+    pruned_and_unpruned_info = {
+        "pruned_info": pruned_info,
+        "num_pruned_channels": num_pruned_channels,
+        "pruned_weights": pruned_weights,
+        "unpruned_info": unpruned_info,
+        "num_unpruned_channels": num_unpruned_channels,
+        "unpruned_weights": unpruned_weights
+    }
+
+    return model, pruned_and_unpruned_info
+
 
 def soft_pruning(original_model, model, device, pruning_percentage=0.2, layer_pruning_percentages=None):
     """
@@ -618,7 +730,7 @@ def get_unpruned_info_high_level(model, pruned_info):
             num_unpruned_channels[name] = (len(unpruned_dim0), len(unpruned_dim1))
             unpruned_weights[name] = unpruned_w
 
-    # print("num unpruned channels", num_unpruned_channels)
+    print("num unpruned channels", num_unpruned_channels)
     return unpruned_info, num_unpruned_channels, unpruned_weights
 
 
@@ -902,6 +1014,7 @@ def extend_channels(model, pruned_dict):
 
             new_channel_dict[name] = (int(new_out_channel), int(new_in_channel))
 
+    print("NEW CHANNELS DICT", new_channel_dict)
     return new_channel_dict
 
 
@@ -910,63 +1023,6 @@ def get_core_weights(pruned_model, unpruned_weights):
     for name, module in pruned_model.named_modules():
         if isinstance(module, nn.Conv2d):
             unpruned_weights[name] = module.weight.data
-
-
-# class ResNet_general(nn.Module):
-#     def __init__(self, block, num_blocks, channel_dict):
-#         super(ResNet_general, self).__init__()
-        
-#         print("CHANNEL DICT", channel_dict)
-#         self.in_channels = channel_dict['conv1'][0]
-#         self.conv1 = nn.Conv2d(channel_dict['conv1'][1], channel_dict['conv1'][0], kernel_size=3, padding=1, bias=False)
-#         self.bn1 = nn.BatchNorm2d(channel_dict['conv1'][0])
-#         self.layer1 = self._make_layer(block, channel_dict['layer1.0.conv1'][0], num_blocks[0])
-#         self.layer2 = self._make_layer(block, channel_dict['layer2.0.conv1'][0], num_blocks[1], stride=2)
-#         self.layer3 = self._make_layer(block, channel_dict['layer3.0.conv1'][0], num_blocks[2], stride=2)
-#         self.fc = nn.Linear(channel_dict['layer3.2.conv2'][0], 10)
-
-#     def _make_layer(self, block, out_channels, blocks, stride=1):
-#         layers = []
-#         layers.append(block(self.in_channels, out_channels))
-#         self.in_channels = out_channels
-#         for _ in range(1, blocks):
-#             layers.append(block(out_channels, out_channels))
-#         return nn.Sequential(*layers)
-
-#     def forward(self, x):
-#         out = F.relu(self.bn1(self.conv1(x)))
-#         out = self.layer1(out)
-#         out = self.layer2(out)
-#         out = self.layer3(out)
-#         out = F.adaptive_avg_pool2d(out,(1, 1))
-#         out = out.view(out.size(0), -1)
-#         out = self.fc(out)
-#         return out
-
-# def Resnet_General(channel_dict):
-#         return ResNet_general(BasicBlock, [3,3,3], channel_dict)
-            
-# class BasicBlock(nn.Module):
-#     def __init__(self, in_channels, out_channels):
-#         super(BasicBlock, self).__init__()
-#         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
-#         self.bn1 = nn.BatchNorm2d(out_channels)
-#         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
-#         self.bn2 = nn.BatchNorm2d(out_channels)
-
-#         self.downsample = nn.Sequential()
-#         if in_channels != out_channels:
-#             self.downsample = nn.Sequential(
-#                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
-#                 nn.BatchNorm2d(out_channels)
-#             )
-
-#     def forward(self, x):
-#         out = F.relu(self.bn1(self.conv1(x)))
-#         out = self.bn2(self.conv2(out))
-#         out += self.downsample(x)
-#         out = F.relu(out)
-#         return out
 
 
 class VGG(nn.Module):
@@ -1100,6 +1156,7 @@ def reconstruct_Global_weights_from_dicts(model, pruned_indices, pruned_weights,
     new_unpruned_dim0_freeze_list = {}
     new_unpruned_dim1_freeze_list = {}
     # Iterate through the model's state_dict to dynamically fetch layer shapes
+    
     for name, layer in model.named_modules():
         if isinstance(layer, nn.Conv2d):
             new_device = layer.weight.device
@@ -1127,6 +1184,81 @@ def reconstruct_Global_weights_from_dicts(model, pruned_indices, pruned_weights,
             new_unpruned_dim0_freeze_list[name] = new_unpruned_dim0
             new_unpruned_dim1_freeze_list[name] = new_unpruned_dim1
 
+               # Sanity checks
+            expected_out = layer.weight.shape[0]
+            expected_in = layer.weight.shape[1]
+            if len(combined_dim0) != expected_out or len(combined_dim1) != expected_in:
+                print(f"[ERROR] Channel mismatch in {name}")
+                print(f"  combined_dim0: {len(combined_dim0)}, layer.out_channels: {expected_out}")
+                print(f"  combined_dim1: {len(combined_dim1)}, layer.in_channels: {expected_in}")
+                print("  Skipping this layer due to shape mismatch.\n")
+
+            for i in range(len(new_pruned_dim0)):
+                out_idx = new_pruned_dim0[i]  # Output channel index
+                for j in range(len(new_pruned_dim1)):
+                    in_idx = new_pruned_dim1[j]   # Input channel index
+                    if out_idx >= layer.weight.data.shape[0] or in_idx >= layer.weight.data.shape[1]:
+                        continue
+                    layer.weight.data[out_idx, in_idx, :, :] = pruned_weights[name][i, j].to(new_device)
+
+            # Assign unpruned weights
+            for i in range(len(new_unpruned_dim0)):
+                out_idx = new_unpruned_dim0[i]  # Output channel index
+                for j in range(len(new_unpruned_dim1)):
+
+                    in_idx = new_unpruned_dim1[j]   # Input channel index
+                    layer.weight.data[out_idx, in_idx, :, :] = unpruned_weights[name][i, j].to(new_device)
+
+
+            # Channel Freezing --> NOT WORKING
+            if freezing:
+                for i in range(len(new_unpruned_dim0)):
+                        out_idx = new_unpruned_dim0[i]  # Output channel index
+                        for j in range(len(new_unpruned_dim1)):
+                            in_idx = new_unpruned_dim1[j]   # Input channel index
+                            layer.weight.data[out_idx, in_idx, :, :].requires_grad = False
+
+                print(name, layer.weight.requires_grad)
+                
+    return model, new_unpruned_dim0_freeze_list, new_unpruned_dim1_freeze_list
+
+def reconstruct_Global_weights_from_dicts_new(model, pruned_indices, pruned_weights, unpruned_indices, unpruned_weights, freezing=False):
+    """
+    Reconstruct weights for a model using pruned and unpruned indices and tensors.
+
+    Returns:
+        - model: reconstructed torch.nn.Module with weights restored
+        - new_unpruned_dim0_freeze_list, new_unpruned_dim1_freeze_list: freeze index maps (if needed)
+    """
+    new_unpruned_dim0_freeze_list = {}
+    new_unpruned_dim1_freeze_list = {}
+
+    for name, layer in model.named_modules():
+        if isinstance(layer, nn.Conv2d):
+            new_device = layer.weight.device
+
+            if name not in pruned_indices or name not in unpruned_indices:
+                print(f"Layer {name} not pruned, skipping weight reconstruction.")
+                continue
+
+            # Original index sets
+            pruned_dim0, pruned_dim1 = pruned_indices[name].values()
+            unpruned_dim0, unpruned_dim1 = unpruned_indices[name].values()
+
+            # Combined sorted indices
+            combined_dim0 = sorted(pruned_dim0 + unpruned_dim0)
+            combined_dim1 = sorted(pruned_dim1 + unpruned_dim1)
+
+            # Find new indices for list1 and list2
+            new_pruned_dim0 = [combined_dim0.index(x) for x in pruned_dim0]
+            new_unpruned_dim0 = [combined_dim0.index(x) for x in unpruned_dim0]
+
+            new_pruned_dim1 = [combined_dim1.index(x) for x in pruned_dim1]
+            new_unpruned_dim1 = [combined_dim1.index(x) for x in unpruned_dim1]
+
+            new_unpruned_dim0_freeze_list[name] = new_unpruned_dim0
+            new_unpruned_dim1_freeze_list[name] = new_unpruned_dim1
+
             # Assign pruned weights
             for i in range(len(new_pruned_dim0)):
                     out_idx = new_pruned_dim0[i]  # Output channel index
@@ -1141,17 +1273,14 @@ def reconstruct_Global_weights_from_dicts(model, pruned_indices, pruned_weights,
                         in_idx = new_unpruned_dim1[j]   # Input channel index
                         layer.weight.data[out_idx, in_idx, :, :] = unpruned_weights[name][i, j].to(new_device)
 
-            # Channel Freezing --> NOT WORKING
+            # Optional freezing
             if freezing:
-                for i in range(len(new_unpruned_dim0)):
-                        out_idx = new_unpruned_dim0[i]  # Output channel index
-                        for j in range(len(new_unpruned_dim1)):
-                            in_idx = new_unpruned_dim1[j]   # Input channel index
-                            layer.weight.data[out_idx, in_idx, :, :].requires_grad = False
+                for i in new_unpruned_dim0:
+                    for j in new_unpruned_dim1:
+                        layer.weight.data[i, j, :, :].requires_grad = False
 
-                print(name, layer.weight.requires_grad)
-                
     return model, new_unpruned_dim0_freeze_list, new_unpruned_dim1_freeze_list
+
 
 def reconstruct_weights_from_dicts(model, pruned_indices, pruned_weights, unpruned_indices, unpruned_weights):
     """
@@ -1182,41 +1311,6 @@ def reconstruct_weights_from_dicts(model, pruned_indices, pruned_weights, unprun
             # Retrieve pruned and unpruned indices
             pruned_dim0, pruned_dim1 = pruned_indices[name].values()
             unpruned_dim0, unpruned_dim1 = unpruned_indices[name].values()
-
-            # for i in range(len(pruned_dim0)):
-            #     out_idx = pruned_dim0[i]  # Output channel index
-            #     for j in range(len(pruned_dim1)):
-            #         in_idx = pruned_dim1[j]  # Input channel index
-
-            #         # Debug prints to verify shapes before access
-            #         print(f"Layer: {name}, Out-Idx: {out_idx}, In-Idx: {in_idx}, "
-            #             f"Pruned Weights Shape: {pruned_weights[name].shape}")
-
-            #         # Check if index is out of bounds before assignment
-            #         if out_idx >= pruned_weights[name].shape[0] or in_idx >= pruned_weights[name].shape[1]:
-            #             print(f"ERROR: Out of bounds access at {name} -> ({out_idx}, {in_idx})")
-            #             continue  # Skip the invalid index
-
-            #         # Assign pruned weights safely
-            #         layer.weight.data[out_idx, in_idx, :, :] = pruned_weights[name][i, j].to(new_device)
-
-            # for i in range(len(unpruned_dim0)):
-            #     out_idx = unpruned_dim0[i]  # Output channel index
-            #     for j in range(len(unpruned_dim1)):
-            #         in_idx = unpruned_dim1[j]  # Input channel index
-
-            #         # Debug prints to verify shapes before access
-            #         print(f"Layer: {name}, Out-Idx: {out_idx}, In-Idx: {in_idx}, "
-            #             f"Unpruned Weights Shape: {unpruned_weights[name].shape}")
-
-            #         # Check if index is out of bounds before assignment
-            #         if out_idx >= unpruned_weights[name].shape[0] or in_idx >= unpruned_weights[name].shape[1]:
-            #             print(f"ERROR: Out of bounds access at {name} -> ({out_idx}, {in_idx})")
-            #             continue  # Skip the invalid index
-
-            #         # Assign unpruned weights safely
-            #         layer.weight.data[out_idx, in_idx, :, :] = unpruned_weights[name][i, j].to(new_device)
-
 
             # Skip if pruned_weights for this layer is empty
             if name not in pruned_weights or pruned_weights[name].numel() == 0:

@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH --job-name=VGG                      # Job name
-#SBATCH --output=scripts/vgg_%j.out        # Standard output log
-#SBATCH --error=scripts/vgg_%j.err         # Standard error log
+#SBATCH --output=scripts/vgg_High_%j.out        # Standard output log
+#SBATCH --error=scripts/vgg_High%j.err         # Standard error log
 #SBATCH --nodes=1                                # Number of nodes
 #SBATCH --ntasks=1                               # Number of tasks
 #SBATCH --cpus-per-task=8                        # Number of CPU cores per task
@@ -24,8 +24,9 @@ cd $SLURM_SUBMIT_DIR
 
 # Run your script
 # python softPruning.py
-# python high_level_pruner.py
-python depGraph_pruning.py
+python high_level_pruner.py
+# python depGraph_pruning.py
+# python iterative_pruning.py
 
 
 #SBATCH --time=2-00:00:00   # D-HH:MM:SS

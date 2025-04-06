@@ -9,7 +9,7 @@ import torch.nn as nn
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model, count_parameters, model_size_in_mb
 # from utils.device_utils import get_device
-from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, high_level_pruner, VGG_General
+from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, high_level_pruner, VGG_General, reconstruct_Global_weights_from_dicts, fine_tuner_zerograd
 
 
 # Iterative pruning approach: Prune all steps then do a reverse rebuilding
@@ -22,6 +22,7 @@ def iterative_depgraph_pruning(
     prune_ratios=[0.2, 0.2, 0.2],
     fine_tune_epochs=5,
     fine_tune_lr=1e-4,
+    schedulers='cosine',
     rebuild=True
 ):
     """
@@ -82,8 +83,7 @@ def iterative_depgraph_pruning(
     
         # 3) Fine tune
         print(f"[Iterative] Fine-tuning pruned model for {fine_tune_epochs} epochs.")
-        # core_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=fine_tune_epochs, learning_rate=fine_tune_lr)
-    fine_tuner(core_model, train_dataloader, val_dataloader, device, ratio, fineTuningType = "pruning", epochs=fine_tune_epochs, scheduler_type="cosine", LR=fine_tune_lr)
+    # fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage=ratio, fineTuningType = "pruning", epochs=fine_tune_epochs, scheduler_type=schedulers, LR=fine_tune_lr)
 
     # Evaluate after fine tuning
     pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
@@ -100,7 +100,7 @@ def iterative_depgraph_pruning(
     # 4) Rebuild logic
     if rebuild:
         for step_idx in range(len(prune_ratios)-1, -1, -1):
-            print(f"{'-'*20} Rebuilding Descendant Model Level-{i+1} {'-'*20}")
+            print(f"{'-'*20} Rebuilding Descendant Model Level-{step_idx+1} {'-'*20}")
             model_state_prev = models[step_idx]
             model_state_pruned = models[step_idx+1]
 
@@ -117,13 +117,36 @@ def iterative_depgraph_pruning(
             get_core_weights(model_state_pruned, unprune_meta_data[step_idx]["unpruned_weights"])
 
             # d) Reconstruct from pruned + unpruned
-            rebuilt_model = reconstruct_weights_from_dicts(
+            # Choose one layer to inspect
+            inspect_layer = "features.3" 
+
+            if inspect_layer in prune_meta_data[step_idx]["pruned_weights"]:
+                print(f"\n🔍 BEFORE REBUILD: Inspecting weights from pruned model: {inspect_layer}")
+                print("→ Pruned weight shape:", prune_meta_data[step_idx]["pruned_weights"][inspect_layer].shape)
+                print("→ Example values (first 2 weights):")
+                print(prune_meta_data[step_idx]["pruned_weights"][inspect_layer][:2, :2])  # First 2x2 weights
+
+            rebuilt_model, freeze_dim0, freeze_dim1 = reconstruct_Global_weights_from_dicts(
                 rebuilt_model,
                 pruned_indices=prune_meta_data[step_idx]["pruned_info"],
                 pruned_weights=prune_meta_data[step_idx]["pruned_weights"],
                 unpruned_indices=unprune_meta_data[step_idx]["unpruned_info"],
                 unpruned_weights=unprune_meta_data[step_idx]["unpruned_weights"]
             )
+
+            rebuilt_conv_layer = dict(rebuilt_model.named_modules())[inspect_layer]
+            print(f"\n✅ AFTER REBUILD: Checking assigned weights for {inspect_layer}")
+            print("→ Rebuilt weight shape:", rebuilt_conv_layer.weight.data.shape)
+            print("→ Example values (first 2 weights):")
+            print(rebuilt_conv_layer.weight.data[:2, :2])  # First 2x2 weights in rebuilt model
+
+            expected = prune_meta_data[step_idx]["pruned_weights"][inspect_layer][:2, :2]
+            actual = rebuilt_conv_layer.weight.data[:2, :2].to(expected.device)
+
+            if torch.allclose(expected, actual, atol=1e-5):
+                print("✅ Weights were correctly copied into the rebuilt model!")
+            else:
+                print("❌ Weight mismatch! Rebuilding may be incorrect.")
 
             # e) Freeze channels if needed
             # rebuilt_model = freeze_channels(rebuilt_model, unprune_meta_data[step_idx]["unpruned_info"])
@@ -136,8 +159,7 @@ def iterative_depgraph_pruning(
 
             # g) Fine-tune the rebuilt
             print("[Backward Rebuild] Fine-tuning rebuilt model...")
-            # rebuilt_model.fine_tune_model(train_dataloader, val_dataloader, device, epochs=fine_tune_epochs, learning_rate=fine_tune_lr)
-            fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, ratio, fineTuningType="rebuild", epochs=fine_tune_epochs, scheduler_type='cosine', LR=fine_tune_lr)
+            # fine_tuner_zerograd(rebuilt_model, train_dataloader, val_dataloader, freeze_dim0, freeze_dim1, device, pruning_percentage = prune_ratios[step_idx], fineTuningType="rebuild", epochs=fine_tune_epochs, scheduler_type=schedulers, LR=fine_tune_lr)
 
             # h) Evaluate after fine-tune
             r_ft_acc = evaluate_model(rebuilt_model, test_dataloader, device)
@@ -155,7 +177,7 @@ def iterative_depgraph_pruning(
 # -----------------------------------------
 # 3) The main function that calls iterative_depgraph_pruning
 # -----------------------------------------
-def main():
+def main(schedulers, lrs, epochs):
     wandb.init(project='ResNet_Iterative', name='ResNet_Iterative')
     wandb_logger = WandbLogger(log_model=False)
 
@@ -166,7 +188,7 @@ def main():
     train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
 
     # Let's define some pruning ratios
-    iterative_ratios = [0.2, 0.2, 0.2] 
+    iterative_ratios = [0.1] 
 
     # Call the iterative pruning function
     results = iterative_depgraph_pruning(
@@ -176,8 +198,9 @@ def main():
         test_dataloader=test_dataloader,
         device=device,
         prune_ratios=iterative_ratios,
-        fine_tune_epochs=25,
-        fine_tune_lr=1e-3,
+        fine_tune_epochs=epochs,
+        fine_tune_lr=lrs,
+        schedulers=schedulers,
         rebuild=True
     )
 
@@ -189,4 +212,15 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    schedulers = ['cosine']
+    # schedulers = ['exponential', 'cyclic', 'Default']
+    # schedulers = ['cosine', 'step', 'exponential', 'cyclic', 'Default']
+    # lrs = [1e-2, 1e-3, 1e-4, 1e-5]
+    lrs = [1e-3]
+    epochs = [100]
+    model_name = "VGG"
+
+    for sch in schedulers:
+        for lr in lrs:
+            for epoch in epochs:
+                 main(schedulers=sch, lrs=lr, epochs=epoch)
