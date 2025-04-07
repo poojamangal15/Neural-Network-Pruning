@@ -9,7 +9,7 @@ import torch.nn as nn
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model, count_parameters, model_size_in_mb
 # from utils.device_utils import get_device
-from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, Resnet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, high_level_pruner, high_level_prunerTaylor, hessian_based_pruner, reconstruct_Global_weights_from_dicts, fine_tuner_zerograd
+from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, Resnet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, high_level_pruner, high_level_prunerTaylor, hessian_based_pruner, reconstruct_Global_weights_from_dicts, fine_tuner_zerograd, soft_pruning, copy_weights_from_dict
 
 
 # Iterative pruning approach: Prune all steps then do a reverse rebuilding
@@ -63,12 +63,19 @@ def iterative_depgraph_pruning(
         
         print("STEP RATIO------", i, ratio)
         # 1) Prune
-        core_model, pruned_and_unpruned_info = high_level_pruner(
+        pruned_model, pruned_and_unpruned_info = soft_pruning(
             original_model=prev_model,
             model=current_model,
             device=device,
             pruning_percentage=ratio
         )
+
+        pruned_model = pruned_model.to(device)
+
+        core_model = Resnet_General(pruned_and_unpruned_info['num_unpruned_channels']).to(device)
+        copy_weights_from_dict(core_model, pruned_and_unpruned_info['unpruned_weights'])
+        print("coremodel", core_model)
+        
         models.append(copy.deepcopy(core_model))
        # 2) Evaluate after pruning
         pruned_params = count_parameters(core_model)
@@ -83,7 +90,7 @@ def iterative_depgraph_pruning(
     
         # 3) Fine tune
         print(f"[Iterative] Fine-tuning pruned model for {fine_tune_epochs} epochs.")
-        # fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage = ratio, fineTuningType = "pruning", epochs=fine_tune_epochs, scheduler_type=schedulers, LR=fine_tune_lr)
+        fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage = ratio, fineTuningType = "pruning", epochs=fine_tune_epochs, scheduler_type=schedulers, LR=fine_tune_lr)
 
         # Evaluate after fine tuning
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
@@ -104,8 +111,8 @@ def iterative_depgraph_pruning(
             model_state_prev = models[step_idx]
             model_state_pruned = models[step_idx+1]
 
-            print("MODEL_state prev", model_state_prev)
-            print("MODEL_state pruned", model_state_pruned)
+            # print("MODEL_state prev", model_state_prev)
+            # print("MODEL_state pruned", model_state_pruned)
             new_channels = extend_channels(model_state_pruned, prune_meta_data[step_idx]["num_pruned_channels"])
             
             # b) Construct a fresh "ResNet"
@@ -128,7 +135,7 @@ def iterative_depgraph_pruning(
 
             # g) Fine-tune the rebuilt
             print("[Backward Rebuild] Fine-tuning rebuilt model...")
-            # fine_tuner_zerograd(rebuilt_model, train_dataloader, val_dataloader, freeze_dim0, freeze_dim1, device, pruning_percentage = prune_ratios[step_idx], fineTuningType="rebuild", epochs=fine_tune_epochs, scheduler_type=schedulers, LR=fine_tune_lr)
+            fine_tuner_zerograd(rebuilt_model, train_dataloader, val_dataloader, freeze_dim0, freeze_dim1, device, pruning_percentage = prune_ratios[step_idx], fineTuningType="rebuild", epochs=fine_tune_epochs, scheduler_type=schedulers, LR=fine_tune_lr)
 
             # h) Evaluate after fine-tune
             rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
@@ -158,7 +165,7 @@ def main(schedulers, lrs, epochs):
     train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
 
     # Let's define some pruning ratios
-    iterative_ratios = [0.1] 
+    iterative_ratios = [0.2, 0.2, 0.2] 
 
     # Call the iterative pruning function
     results = iterative_depgraph_pruning(

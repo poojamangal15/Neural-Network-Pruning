@@ -47,9 +47,7 @@ def main(schedulers):
         pruned_model, pruned_and_unpruned_info = soft_pruning(model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
         pruned_model = pruned_model.to(device)
 
-        print("IN MAIN NUM UNPRUNED", pruned_and_unpruned_info['num_unpruned_channels'])
         core_model = Resnet_General(pruned_and_unpruned_info['num_unpruned_channels']).to(device)
-        print("CORE MODEL IMMEDIATELY AFTER", core_model)
         copy_weights_from_dict(core_model, pruned_and_unpruned_info['unpruned_weights'])
 
         print("coremodel", core_model)
@@ -59,7 +57,7 @@ def main(schedulers):
         pruned_model_size = model_size_in_mb(core_model)
 
         print("Starting post-pruning fine-tuning of the pruned model...")
-        fine_tuner(core_model, train_dataloader, val_dataloader, device, fineTuningType = "pruning", epochs=5, scheduler_type=schedulers, LR=1e-4)
+        # fine_tuner(core_model, train_dataloader, val_dataloader, device, fineTuningType = "pruning", epochs=5, scheduler_type=schedulers, LR=1e-4)
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
 
         new_channels = extend_channels(core_model, pruned_and_unpruned_info["num_pruned_channels"])        
@@ -77,7 +75,7 @@ def main(schedulers):
         rebuild_model_size = model_size_in_mb(rebuilt_model)
 
         print("Starting post-rebuilding fine-tuning of the pruned model...")
-        fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, fineTuningType="rebuild", epochs=5, scheduler_type=schedulers, LR=1e-4)
+        # fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, fineTuningType="rebuild", epochs=5, scheduler_type=schedulers, LR=1e-4)
 
         rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
 

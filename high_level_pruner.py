@@ -15,6 +15,7 @@ from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, ge
 
 
 def main(schedulers, lrs, epochs):
+    print("RESNET HIGH LEVEL PRUNER 50 percent")
     wandb.init(project='resNet_depGraph', name=f'hessian_high_level')
     wandb_logger = WandbLogger(log_model=False)
 
@@ -26,7 +27,7 @@ def main(schedulers, lrs, epochs):
     print("MODEL BEFORE PRUNING", model)
 
     # pruning_percentages = [0.3, 0.5, 0.7, 0.9]
-    pruning_percentages = [0.3]
+    pruning_percentages = [0.5]
 
     metrics_pruned = {
         "pruning_percentage": [], "LR": [], "scheduler": [], "epochs" : [], "test_accuracy": [], "count_params": [], "model_size": []
@@ -57,6 +58,8 @@ def main(schedulers, lrs, epochs):
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
         pruned_model_size = model_size_in_mb(core_model)
 
+        print("PRUNED PARAMS", pruned_params)
+        print("PRUNED MODEL SIZE", pruned_model_size)
         wandb.log({
             "Pruning Percentage": pruning_percentage * 100,
             "Test Accuracy (After Pruning)": pruned_accuracy,
@@ -67,6 +70,7 @@ def main(schedulers, lrs, epochs):
         print("Starting post-pruning fine-tuning of the pruned model...")
         # fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "pruning", epochs=epochs, scheduler_type=schedulers, LR=lrs)
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
+        print("PRUNED ACCURACY ---->", pruned_accuracy)
 
         wandb.log({
             "After Fine Tune Pruning Percentage": pruning_percentage * 100,
@@ -77,8 +81,8 @@ def main(schedulers, lrs, epochs):
 
         rebuilt_model = Resnet_General(new_channels).to(device)
         get_core_weights(core_model, pruned_and_unpruned_info["unpruned_weights"])
-        # rebuilt_model = reconstruct_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
-        rebuilt_model, freeze_dim0, freeze_dim1 = reconstruct_Global_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
+        rebuilt_model = reconstruct_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
+        # rebuilt_model, freeze_dim0, freeze_dim1 = reconstruct_Global_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
         # rebuilt_model = freeze_channels(rebuilt_model, pruned_and_unpruned_info["unpruned_info"])
         rebuilt_model = rebuilt_model.to(device).to(torch.float32)
 

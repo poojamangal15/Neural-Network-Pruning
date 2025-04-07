@@ -489,7 +489,7 @@ def soft_pruning(original_model, model, device, pruning_percentage=0.2, layer_pr
         importance=imp,
         global_pruning=True,
         iterative_steps=iterative_steps,
-        pruning_ratio=0.5, # remove 50% channels, ResNet18 = {64, 128, 256, 512} => ResNet18_Half = {32, 64, 128, 256}
+        pruning_ratio=pruning_percentage, 
         ignored_layers=ignored_layers,
     )
 
@@ -514,17 +514,17 @@ def soft_pruning(original_model, model, device, pruning_percentage=0.2, layer_pr
         # print(model.conv1.weight)
 
         macs, nparams = tp.utils.count_ops_and_params(model, example_inputs)
-        print(model)
-        print(model(example_inputs).shape)
-        print(
-            "  Iter %d/%d, Params: %.2f M => %.2f M"
-            % (i+1, iterative_steps, base_nparams / 1e6, nparams / 1e6)
-        )
-        print(
-            "  Iter %d/%d, MACs: %.2f G => %.2f G"
-            % (i+1, iterative_steps, base_macs / 1e9, macs / 1e9)
-        )
-        count_zero_weights(model)
+        # print(model)
+        # print(model(example_inputs).shape)
+        # print(
+        #     "  Iter %d/%d, Params: %.2f M => %.2f M"
+        #     % (i+1, iterative_steps, base_nparams / 1e6, nparams / 1e6)
+        # )
+        # print(
+        #     "  Iter %d/%d, MACs: %.2f G => %.2f G"
+        #     % (i+1, iterative_steps, base_macs / 1e9, macs / 1e9)
+        # )
+        # count_zero_weights(model)
         # get_nonzero_indices(model)
 
     # Check for all the pruned and unpruned indices and weights    
@@ -1202,6 +1202,7 @@ def reconstruct_Global_weights_from_dicts(model, pruned_indices, pruned_weights,
                     out_idx = new_unpruned_dim0[i]  # Output channel index
                     for j in range(len(new_unpruned_dim1)):
                         in_idx = new_unpruned_dim1[j]   # Input channel index
+                        print(f"{name}: Assigning weight[{out_idx}, {in_idx}] shape {unpruned_weights[name][i, j].shape} -> layer.weight.data[{out_idx}, {in_idx}].shape = {layer.weight.data[out_idx, in_idx].shape}")
                         layer.weight.data[out_idx, in_idx, :, :] = unpruned_weights[name][i, j].to(new_device)
 
             # Channel Freezing --> NOT WORKING
