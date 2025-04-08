@@ -15,7 +15,8 @@ from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, ge
 
 
 def main(schedulers, lrs, epochs):
-    wandb.init(project='alexnet_depGraph', name='AlexNet_Prune_Run')
+    print("SOFT PRUNING ALEXNET")
+    wandb.init(project='alexnet_softPruning', name='AlexNet_Prune_Run')
     wandb_logger = WandbLogger(log_model=False)
 
     device = get_device()
@@ -24,8 +25,8 @@ def main(schedulers, lrs, epochs):
     model = AlexNetFineTuner.load_from_checkpoint(checkpoint_path).to(device)
     print("MODEL BEFORE PRUNING:\n", model.model)
 
-    # pruning_percentages = [0.2, 0.4, 0.6, 0.8]
-    pruning_percentages = [0.5]
+    pruning_percentages = [0.3, 0.5, 0.7]
+    # pruning_percentages = [0.5]
 
     metrics_pruned = {
         "pruning_percentage": [], "LR": [], "scheduler": [], "epochs" : [], "test_accuracy": [], "count_params": [], "model_size": []
@@ -94,7 +95,7 @@ def main(schedulers, lrs, epochs):
         })
 
         print("Starting post-rebuilding fine-tuning of the pruned model...")
-        fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "rebuild", epochs=epochs, scheduler_type=schedulers, LR=lrs)
+        fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "rebuild", epochs=epochs, scheduler_type=schedulers, LR=1e-5)
 
         rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
 
@@ -132,7 +133,7 @@ def main(schedulers, lrs, epochs):
 
 if __name__ == "__main__":
     schedulers = ['cosine']
-    lrs = [1e-3, 1e-4]
+    lrs = [1e-4]
     epochs = [100]
     # schedulers = ['cosine', 'step', 'exponential', 'cyclic']
     for sch in schedulers:
