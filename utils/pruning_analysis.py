@@ -17,8 +17,84 @@ def get_device():
     return torch.device("mps" if torch.backends.mps.is_available() else 
                         "cuda" if torch.cuda.is_available() else "cpu")
 
-import torch_pruning as tp
-import torch
+def verify_pruned_slices(module_dict, pruned_info, pruned_weights):
+    """
+    Verifies that the pruned weight slices in `pruned_weights` match
+    the corresponding slices of the original model’s weights.
+    """
+    for layer_name, layer_indices in pruned_info.items():
+        if layer_name not in pruned_weights:
+            continue
+        pruned_weight_tensor = pruned_weights[layer_name]
+        pruned_dim0 = layer_indices['pruned_dim0']
+        pruned_dim1 = layer_indices['pruned_dim1']
+
+        original_layer = module_dict.get(layer_name, None)
+        if not original_layer or not hasattr(original_layer, "weight"):
+            continue
+
+        # Original reference slice
+        ref_slice = None
+        w = original_layer.weight.detach()
+
+        if pruned_dim0 and pruned_dim1:
+            ref_slice = w[pruned_dim0][:, pruned_dim1, :, :]
+        elif pruned_dim0:
+            ref_slice = w[pruned_dim0]
+        elif pruned_dim1:
+            ref_slice = w[:, pruned_dim1]
+        else:
+            # No pruned indices => skip
+            continue
+
+        # Convert both to CPU for comparison
+        pruned_w_cpu = pruned_weight_tensor.cpu()
+        ref_slice_cpu = ref_slice.cpu()
+
+        if not torch.allclose(pruned_w_cpu, ref_slice_cpu, atol=1e-6):
+            print(f"[Mismatch ❌] Pruned slice for layer '{layer_name}' does NOT match the original.")
+        else:
+            print(f"[Match ✅] Pruned slice for layer '{layer_name}' correctly matches the original.")
+
+
+def verify_unpruned_slices(module_dict, unpruned_info, unpruned_weights):
+    """
+    Verifies that the unpruned weight slices in `unpruned_weights` match
+    the corresponding slices of the original model’s weights.
+    """
+    for layer_name, layer_indices in unpruned_info.items():
+        if layer_name not in unpruned_weights:
+            continue
+        unpruned_weight_tensor = unpruned_weights[layer_name]
+        unpruned_dim0 = layer_indices['unpruned_dim0']
+        unpruned_dim1 = layer_indices['unpruned_dim1']
+
+        original_layer = module_dict.get(layer_name, None)
+        if not original_layer or not hasattr(original_layer, "weight"):
+            continue
+
+        # Original reference slice
+        ref_slice = None
+        w = original_layer.weight.detach()
+
+        if unpruned_dim0 and unpruned_dim1:
+            ref_slice = w[unpruned_dim0][:, unpruned_dim1, :, :]
+        elif unpruned_dim0:
+            ref_slice = w[unpruned_dim0]
+        elif unpruned_dim1:
+            ref_slice = w[:, unpruned_dim1]
+        else:
+            # No unpruned channels => skip
+            continue
+
+        unpruned_w_cpu = unpruned_weight_tensor.cpu()
+        ref_slice_cpu = ref_slice.cpu()
+
+        if not torch.allclose(unpruned_w_cpu, ref_slice_cpu, atol=1e-6):
+            print(f"[Mismatch ❌] Unpruned slice for layer '{layer_name}' does NOT match the original.")
+        else:
+            print(f"[Match ✅] Unpruned slice for layer '{layer_name}' correctly matches the original.")
+
 
 def prune_model(original_model, model, device, pruning_percentage=0.2):
     """
@@ -75,7 +151,7 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
             continue
 
         group = DG.get_pruning_group(layer_module, prune_fn, idxs=pruning_idxs)
-        print("group.details()", group.details()) 
+        # print("group.details()", group.details()) 
 
         if DG.check_pruning_group(group):
             groups.append((layer_name, group))
@@ -96,6 +172,8 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
     pruned_info, num_pruned_channels, pruned_weights = get_pruned_info(groups, original_model, layers_to_prune)
     unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info(groups, original_model, pruned_info)
 
+    verify_pruned_slices(dict(original_model.named_modules()), pruned_info, pruned_weights)
+    verify_unpruned_slices(dict(original_model.named_modules()), unpruned_info, unpruned_weights)
     pruned_and_unpruned_info = {"pruned_info": pruned_info, 
                                 "num_pruned_channels": num_pruned_channels, 
                                 "pruned_weights": pruned_weights, 
@@ -104,9 +182,194 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
                                 "unpruned_weights": unpruned_weights}
     return model, pruned_and_unpruned_info
 
+def high_level_pruner(original_model, model, device, pruning_percentage=0.2):
+    """
+    Prunes 'model' in-place using Torch-Pruning's MagnitudePruner,
+    but slices final pruned/unpruned weights from 'original_model'
+    for verification and storage.
+    """
+    example_inputs = torch.randn(1, 3, 32, 32, dtype=torch.float32, device=device)
+    imp = tp.importance.MagnitudeImportance(p=2)
 
+    # Identify layers to ignore (final linear, etc.)
+    ignored_layers = []
+    for m in model.modules():
+        if isinstance(m, torch.nn.Linear) and m.out_features == 10:
+            ignored_layers.append(m)
 
-def high_level_pruner(original_model, model, device, pruning_percentage=0.2, layer_pruning_percentages=None):
+    iterative_steps = 1
+    pruner = tp.pruner.MagnitudePruner(
+        model,
+        example_inputs,
+        importance=imp,
+        iterative_steps=iterative_steps,
+        pruning_ratio=pruning_percentage,
+        global_pruning=True,
+        ignored_layers=ignored_layers,
+    )
+
+    # We'll store final pruned indices
+    # pruned_info[layer_name] = {'pruned_dim0': [...], 'pruned_dim1': [...]}
+    pruned_info = {}
+    num_pruned_channels = {}
+
+    # ---------------------------
+    # 1) PRUNE & COLLECT PRUNED INDICES
+    # ---------------------------
+    for step_id in range(iterative_steps):
+        for group in pruner.step(interactive=True):
+            for dep, idxs in group:
+                target_layer = dep.target.module
+                pruning_fn = dep.handler
+
+                # Identify the layer name
+                layer_name = None
+                for n, mod in model.named_modules():
+                    if mod is target_layer:
+                        layer_name = n
+                        break
+                if layer_name is None:
+                    continue
+
+                if layer_name.startswith("model."):
+                    layer_name = layer_name[len("model."):]
+
+                if not isinstance(target_layer, nn.Conv2d):
+                    continue
+
+                if layer_name not in pruned_info:
+                    pruned_info[layer_name] = {'pruned_dim0': [], 'pruned_dim1': []}
+                    num_pruned_channels[layer_name] = (0, 0)
+
+                if pruning_fn in [tp.prune_conv_out_channels]:
+                    pruned_info[layer_name]['pruned_dim0'].extend(idxs)
+                elif pruning_fn in [tp.prune_conv_in_channels]:
+                    pruned_info[layer_name]['pruned_dim1'].extend(idxs)
+
+            group.prune()
+
+    # ---------------------------
+    # 2) DEDUPLICATE PRUNED INDICES
+    # ---------------------------
+    module_dict = dict(original_model.named_modules())
+    for ln, dims_dict in pruned_info.items():
+        dims_dict['pruned_dim0'] = sorted(set(dims_dict['pruned_dim0']))
+        dims_dict['pruned_dim1'] = sorted(set(dims_dict['pruned_dim1']))
+        num_pruned_channels[ln] = (
+            len(dims_dict['pruned_dim0']),
+            len(dims_dict['pruned_dim1'])
+        )
+
+    print("num pruned info:", num_pruned_channels)
+
+    # ---------------------------
+    # 3) DERIVE UNPRUNED INDICES FROM THE ORIGINAL MODEL
+    # ---------------------------
+    unpruned_info = {}
+    for layer_name, dims_dict in pruned_info.items():
+        orig_layer = module_dict.get(layer_name)
+        if not orig_layer or not isinstance(orig_layer, nn.Conv2d):
+            continue
+
+        out_channels = orig_layer.weight.shape[0]
+        in_channels = orig_layer.weight.shape[1]
+
+        pruned_out = set(dims_dict['pruned_dim0'])
+        pruned_in = set(dims_dict['pruned_dim1'])
+
+        all_out = set(range(out_channels))
+        all_in  = set(range(in_channels))
+
+        unpruned_out = sorted(all_out - pruned_out)
+        unpruned_in  = sorted(all_in  - pruned_in)
+
+        unpruned_info[layer_name] = {
+            'unpruned_dim0': unpruned_out,
+            'unpruned_dim1': unpruned_in
+        }
+
+    # For any Conv2d not present in pruned_info (no channels pruned),
+    # we might want to store them in unpruned_info as well:
+    for name, mod in module_dict.items():
+        if isinstance(mod, nn.Conv2d) and name not in pruned_info:
+            out_channels = mod.weight.shape[0]
+            in_channels  = mod.weight.shape[1]
+            unpruned_info[name] = {
+                'unpruned_dim0': list(range(out_channels)),
+                'unpruned_dim1': list(range(in_channels))
+            }
+            num_pruned_channels[name] = (0,0)  # No pruned channels
+
+    # Build num_unpruned_channels
+    num_unpruned_channels = {}
+    for ln, dims_dict in unpruned_info.items():
+        num_out = len(dims_dict['unpruned_dim0'])
+        num_in  = len(dims_dict['unpruned_dim1'])
+        num_unpruned_channels[ln] = (num_out, num_in)
+
+    # ---------------------------
+    # 4) SLICE PRUNED & UNPRUNED WEIGHTS FROM ORIGINAL MODEL
+    # ---------------------------
+    pruned_weights = {}
+    unpruned_weights = {}
+
+    for layer_name in sorted(set(list(pruned_info.keys()) + list(unpruned_info.keys()))):
+        layer = module_dict.get(layer_name, None)
+        if not layer or not isinstance(layer, nn.Conv2d):
+            continue
+
+        w = layer.weight.detach()
+
+        # Pruned
+        pd0 = pruned_info.get(layer_name, {}).get('pruned_dim0', [])
+        pd1 = pruned_info.get(layer_name, {}).get('pruned_dim1', [])
+        if pd0 or pd1:
+            if pd0 and pd1:
+                pruned_weights[layer_name] = w[pd0][:, pd1, :, :].clone()
+            elif pd0:
+                pruned_weights[layer_name] = w[pd0].clone()
+            elif pd1:
+                pruned_weights[layer_name] = w[:, pd1].clone()
+            else:
+                pruned_weights[layer_name] = torch.empty((0,))
+        else:
+            # no pruned channels
+            pruned_weights[layer_name] = torch.empty((0,))
+
+        # Unpruned
+        ud0 = unpruned_info[layer_name]['unpruned_dim0']
+        ud1 = unpruned_info[layer_name]['unpruned_dim1']
+        if ud0 or ud1:
+            if ud0 and ud1:
+                unpruned_weights[layer_name] = w[ud0][:, ud1, :, :].clone()
+            elif ud0:
+                unpruned_weights[layer_name] = w[ud0].clone()
+            elif ud1:
+                unpruned_weights[layer_name] = w[:, ud1].clone()
+        else:
+            unpruned_weights[layer_name] = torch.empty((0,))
+
+    # ---------------------------
+    # 5) RUN VERIFICATION
+    # ---------------------------
+    verify_pruned_slices(module_dict, pruned_info, pruned_weights)
+    verify_unpruned_slices(module_dict, unpruned_info, unpruned_weights)
+
+    # ---------------------------
+    # 6) BUILD DICT TO RETURN
+    # ---------------------------
+    pruned_and_unpruned_info = {
+        "pruned_info": pruned_info,
+        "num_pruned_channels": num_pruned_channels,
+        "pruned_weights": pruned_weights,
+        "unpruned_info": unpruned_info,
+        "num_unpruned_channels": num_unpruned_channels,
+        "unpruned_weights": unpruned_weights
+    }
+
+    return model, pruned_and_unpruned_info
+
+def high_level_pruner_old(original_model, model, device, pruning_percentage=0.2, layer_pruning_percentages=None):
     """
     Prunes the model using Torch-Pruning's Magnitude Pruner.
     
@@ -217,111 +480,6 @@ def high_level_pruner(original_model, model, device, pruning_percentage=0.2, lay
     return model, pruned_and_unpruned_info
 
 
-def high_level_pruner_new(original_model, model, device, pruning_percentage=0.2, layer_pruning_percentages=None):
-    example_inputs = torch.randn(1, 3, 32, 32, dtype=torch.float32, device=device)
-    imp = tp.importance.MagnitudeImportance(p=2)
-
-    ignored_layers = []
-    for m in model.modules():
-        if isinstance(m, torch.nn.Linear) and m.out_features == 10:
-            ignored_layers.append(m)
-
-    pruner = tp.pruner.MagnitudePruner(
-        model,
-        example_inputs,
-        importance=imp,
-        iterative_steps=1,
-        pruning_ratio=pruning_percentage,
-        ignored_layers=ignored_layers,
-    )
-
-    pruned_weights = {}
-    num_pruned_channels = {}
-    pruned_info = {}
-
-    for group in pruner.step(interactive=True):
-        for dep, idxs in group:
-            target_layer = dep.target.module
-            pruning_fn = dep.handler
-
-            # ✅ Get layer name
-            layer_name = None
-            for name, module in model.named_modules():
-                if module is target_layer:
-                    layer_name = name
-                    break
-            if layer_name is None:
-                continue
-            if layer_name.startswith("model."):
-                layer_name = layer_name[len("model."):]
-
-            # ✅ Get corresponding unpruned layer from original_model
-            original_layer = dict(original_model.named_modules())[layer_name]
-
-            if layer_name not in pruned_info and isinstance(target_layer, nn.Conv2d):
-                pruned_info[layer_name] = {'pruned_dim0': [], 'pruned_dim1': []}
-                pruned_weights[layer_name] = torch.empty(0)
-                num_pruned_channels[layer_name] = (0, 0)
-
-            if isinstance(target_layer, nn.Conv2d):
-                if pruning_fn in [tp.prune_conv_in_channels]:
-                    pruned_info[layer_name]['pruned_dim1'].extend(idxs)
-                    num_pruned_channels[layer_name] = (
-                        num_pruned_channels[layer_name][0], len(pruned_info[layer_name]['pruned_dim1'])
-                    )
-                    # ✅ Extract from original model (not mutated one)
-                    pruned_weights[layer_name] = original_layer.weight.data[:, idxs, :, :].clone()
-
-                elif pruning_fn in [tp.prune_conv_out_channels]:
-                    pruned_info[layer_name]['pruned_dim0'].extend(idxs)
-                    num_pruned_channels[layer_name] = (
-                        len(pruned_info[layer_name]['pruned_dim0']), num_pruned_channels[layer_name][1]
-                    )
-                    # ✅ Extract from original model
-                    pruned_weights[layer_name] = original_layer.weight.data[idxs, :, :, :].clone()
-
-        group.prune()  # Only prune after storing correct weights
-
-    print("Pruning complete")
-    print("num pruned info", num_pruned_channels)
-
-    layer_name = "features.3"
-
-    # Original full weight tensor (before pruning)
-    original_weight = original_model.features[3].weight.data.cpu()
-
-    # Your extracted pruned weights
-    extracted_weight = pruned_weights[layer_name].cpu()
-
-    # Indices you stored
-    pruned_dim0 = pruned_info[layer_name]["pruned_dim0"]
-    pruned_dim1 = pruned_info[layer_name]["pruned_dim1"]
-
-    # Compare the extracted weights with the true slices from the original
-    for i, out_idx in enumerate(pruned_dim0):
-        for j, in_idx in enumerate(pruned_dim1):
-            expected = original_weight[out_idx, in_idx]
-            actual = extracted_weight[i, j]
-            if not torch.allclose(expected, actual, atol=1e-6):
-                print(f"❌ Mismatch at out={out_idx}, in={in_idx} (expected vs actual):")
-                print(expected)
-                print(actual)
-            else:
-                print(f"✅ Match at out={out_idx}, in={in_idx}")
-
-    unpruned_info, num_unpruned_channels, unpruned_weights = get_unpruned_info_high_level(original_model, pruned_info)
-
-    pruned_and_unpruned_info = {
-        "pruned_info": pruned_info,
-        "num_pruned_channels": num_pruned_channels,
-        "pruned_weights": pruned_weights,
-        "unpruned_info": unpruned_info,
-        "num_unpruned_channels": num_unpruned_channels,
-        "unpruned_weights": unpruned_weights
-    }
-
-    return model, pruned_and_unpruned_info
-
 
 def soft_pruning(original_model, model, device, pruning_percentage=0.2, layer_pruning_percentages=None):
     """
@@ -405,7 +563,238 @@ def soft_pruning(original_model, model, device, pruning_percentage=0.2, layer_pr
 
     return model, pruned_and_unpruned_info
 
-def high_level_prunerTaylor(original_model, model, device, train_loader, pruning_percentage=0.2, layer_pruning_percentages=None):
+def high_level_prunerTaylor(
+    original_model,
+    model,
+    device,
+    train_loader,
+    pruning_percentage=0.2
+):
+    """
+    Prunes 'model' in-place using Torch-Pruning's TaylorImportance,
+    but slices final pruned/unpruned weights from 'original_model'
+    for verification and storage.
+
+    Parameters:
+        original_model (nn.Module): The unpruned reference model (used for indexing and verification).
+        model (nn.Module): The PyTorch model to be pruned in-place.
+        device (torch.device): The computing device (CPU/MPS/CUDA).
+        train_loader (DataLoader): A DataLoader to compute gradients for Taylor importance.
+        pruning_percentage (float): Global percentage of channels to prune (0.0 - 1.0).
+
+    Returns:
+        (model, pruned_and_unpruned_info) tuple:
+           model: The pruned model (on 'device').
+           pruned_and_unpruned_info: dict containing pruned/unpruned indices, slices, etc.
+    """
+    # ---------------------------------------------------------------------
+    # 1) Compute One Batch of Gradients for Taylor Importance
+    # ---------------------------------------------------------------------
+    model.to(device)
+    model.train()
+
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    criterion = nn.CrossEntropyLoss()
+
+    # We'll just grab a single small batch from train_loader
+    inputs, targets = next(iter(train_loader))
+    inputs, targets = inputs.to(device), targets.to(device)
+    optimizer.zero_grad()
+    outputs = model(inputs)
+    loss = criterion(outputs, targets)
+    loss.backward()  # Required for Taylor-based pruning
+    # (We only do one batch to measure gradients)
+
+    # ---------------------------------------------------------------------
+    # 2) Build a Taylor Pruner
+    # ---------------------------------------------------------------------
+    example_inputs = torch.randn(1, 3, 32, 32, dtype=torch.float32, device=device)
+    imp = tp.importance.TaylorImportance()  # uses .grad in the weights
+
+    ignored_layers = []
+    for m in model.modules():
+        # e.g. if final linear has out_features=10 for a 10-class classifier, ignore it
+        if isinstance(m, nn.Linear) and m.out_features == 10:
+            ignored_layers.append(m)
+
+    pruner = tp.pruner.MagnitudePruner(
+        model,
+        example_inputs=example_inputs,
+        importance=imp,                 # <--- this is the difference: Taylor-based importance
+        iterative_steps=1,              # If you want iterative pruning, increase this.
+        pruning_ratio=pruning_percentage,
+        ignored_layers=ignored_layers,
+    )
+
+    # We'll store final pruned indices here:
+    #   pruned_info[layer_name] = {'pruned_dim0': [...], 'pruned_dim1': [...]}
+    pruned_info = {}
+    num_pruned_channels = {}
+
+    # ---------------------------------------------------------------------
+    # 3) Prune & Collect Indices
+    # ---------------------------------------------------------------------
+    # The pruner.step() returns groups to prune. We step in interactive mode just like Magnitude.
+    for group in pruner.step(interactive=True):
+        # Each group is a list of (dep, idxs) pairs
+        for dep, idxs in group:
+            target_layer = dep.target.module
+            pruning_fn   = dep.handler
+
+            # Figure out which layer name this is
+            layer_name = None
+            for n, mod in model.named_modules():
+                if mod is target_layer:
+                    layer_name = n
+                    break
+            if layer_name is None:
+                continue  # skip if not found
+
+            if layer_name.startswith("model."):
+                layer_name = layer_name[len("model."):]
+
+            # We only handle Conv2d for now
+            if not isinstance(target_layer, nn.Conv2d):
+                continue
+
+            if layer_name not in pruned_info:
+                pruned_info[layer_name] = {'pruned_dim0': [], 'pruned_dim1': []}
+                num_pruned_channels[layer_name] = (0, 0)
+
+            # If out_channels are pruned
+            if pruning_fn in [tp.prune_conv_out_channels]:
+                pruned_info[layer_name]['pruned_dim0'].extend(idxs)
+            # If in_channels are pruned
+            elif pruning_fn in [tp.prune_conv_in_channels]:
+                pruned_info[layer_name]['pruned_dim1'].extend(idxs)
+
+        # Actually perform the prune in-place
+        group.prune()
+
+    # ---------------------------------------------------------------------
+    # 4) Deduplicate & Summarize Pruned Indices
+    # ---------------------------------------------------------------------
+    module_dict = dict(original_model.named_modules())
+    for ln, dims_dict in pruned_info.items():
+        dims_dict['pruned_dim0'] = sorted(set(dims_dict['pruned_dim0']))
+        dims_dict['pruned_dim1'] = sorted(set(dims_dict['pruned_dim1']))
+        out_pruned_count = len(dims_dict['pruned_dim0'])
+        in_pruned_count  = len(dims_dict['pruned_dim1'])
+        num_pruned_channels[ln] = (out_pruned_count, in_pruned_count)
+
+    # Debug info
+    print("[Taylor Pruning] num_pruned_channels:", num_pruned_channels)
+
+    # ---------------------------------------------------------------------
+    # 5) Compute Unpruned Indices from the Original Model
+    # ---------------------------------------------------------------------
+    unpruned_info = {}
+    for layer_name, dims_dict in pruned_info.items():
+        orig_layer = module_dict.get(layer_name, None)
+        if not orig_layer or not isinstance(orig_layer, nn.Conv2d):
+            continue
+
+        out_channels = orig_layer.weight.shape[0]
+        in_channels  = orig_layer.weight.shape[1]
+
+        pruned_out = set(dims_dict['pruned_dim0'])
+        pruned_in  = set(dims_dict['pruned_dim1'])
+
+        all_out = set(range(out_channels))
+        all_in  = set(range(in_channels))
+
+        unpruned_out = sorted(all_out - pruned_out)
+        unpruned_in  = sorted(all_in  - pruned_in)
+
+        unpruned_info[layer_name] = {
+            'unpruned_dim0': unpruned_out,
+            'unpruned_dim1': unpruned_in
+        }
+
+    # For any Conv2d not present in pruned_info, no channels got pruned
+    for name, mod in module_dict.items():
+        if isinstance(mod, nn.Conv2d) and name not in pruned_info:
+            out_channels = mod.weight.shape[0]
+            in_channels  = mod.weight.shape[1]
+            unpruned_info[name] = {
+                'unpruned_dim0': list(range(out_channels)),
+                'unpruned_dim1': list(range(in_channels))
+            }
+            num_pruned_channels[name] = (0, 0)
+
+    num_unpruned_channels = {}
+    for ln, dims_dict in unpruned_info.items():
+        num_out = len(dims_dict['unpruned_dim0'])
+        num_in  = len(dims_dict['unpruned_dim1'])
+        num_unpruned_channels[ln] = (num_out, num_in)
+
+    # ---------------------------------------------------------------------
+    # 6) Slice Pruned & Unpruned Weights from the Original Model
+    # ---------------------------------------------------------------------
+    pruned_weights = {}
+    unpruned_weights = {}
+
+    for layer_name in sorted(set(list(pruned_info.keys()) + list(unpruned_info.keys()))):
+        layer = module_dict.get(layer_name, None)
+        if not layer or not isinstance(layer, nn.Conv2d):
+            continue
+
+        w = layer.weight.detach()
+
+        # PRUNED
+        pd0 = pruned_info.get(layer_name, {}).get('pruned_dim0', [])
+        pd1 = pruned_info.get(layer_name, {}).get('pruned_dim1', [])
+        if pd0 or pd1:
+            if pd0 and pd1:
+                pruned_weights[layer_name] = w[pd0][:, pd1, :, :].clone()
+            elif pd0:
+                pruned_weights[layer_name] = w[pd0].clone()
+            elif pd1:
+                pruned_weights[layer_name] = w[:, pd1].clone()
+            else:
+                pruned_weights[layer_name] = torch.empty((0,))
+        else:
+            pruned_weights[layer_name] = torch.empty((0,))
+
+        # UNPRUNED
+        ud0 = unpruned_info[layer_name]['unpruned_dim0']
+        ud1 = unpruned_info[layer_name]['unpruned_dim1']
+        if ud0 or ud1:
+            if ud0 and ud1:
+                unpruned_weights[layer_name] = w[ud0][:, ud1, :, :].clone()
+            elif ud0:
+                unpruned_weights[layer_name] = w[ud0].clone()
+            elif ud1:
+                unpruned_weights[layer_name] = w[:, ud1].clone()
+            else:
+                unpruned_weights[layer_name] = torch.empty((0,))
+        else:
+            unpruned_weights[layer_name] = torch.empty((0,))
+
+    # ---------------------------------------------------------------------
+    # 7) Verification (Optional, if you have these functions)
+    # ---------------------------------------------------------------------
+    # from your verification utils: verify_pruned_slices, verify_unpruned_slices
+    # module_dict = dict(original_model.named_modules())
+    # verify_pruned_slices(module_dict, pruned_info, pruned_weights)
+    # verify_unpruned_slices(module_dict, unpruned_info, unpruned_weights)
+
+    # ---------------------------------------------------------------------
+    # 8) Build the Return Dictionary
+    # ---------------------------------------------------------------------
+    pruned_and_unpruned_info = {
+        "pruned_info": pruned_info,
+        "num_pruned_channels": num_pruned_channels,
+        "pruned_weights": pruned_weights,
+        "unpruned_info": unpruned_info,
+        "num_unpruned_channels": num_unpruned_channels,
+        "unpruned_weights": unpruned_weights
+    }
+
+    return model, pruned_and_unpruned_info
+
+
+def high_level_prunerTaylor_old(original_model, model, device, train_loader, pruning_percentage=0.2, layer_pruning_percentages=None):
     """
     Prunes the model using Torch-Pruning's Taylor Importance Pruner.
 
@@ -513,7 +902,7 @@ def high_level_prunerTaylor(original_model, model, device, train_loader, pruning
 
     return model, pruned_and_unpruned_info
 
-def compute_hessian(loss, model, scale_factor=1e3):
+def compute_hessian_old(loss, model, scale_factor=1e3):
     """
     Computes an approximation of the Hessian for each trainable parameter in the model.
     - Skips parameters without gradients.
@@ -542,7 +931,7 @@ def compute_hessian(loss, model, scale_factor=1e3):
                 continue
     return hessian_dict
 
-def hessian_based_pruner(original_model, model, device, train_loader, pruning_percentage=0.2):
+def hessian_based_pruner_old(original_model, model, device, train_loader, pruning_percentage=0.2):
     """
     Prunes the model using Hessian-based Importance.
     
@@ -649,6 +1038,269 @@ def hessian_based_pruner(original_model, model, device, train_loader, pruning_pe
 
     return model, pruned_and_unpruned_info
 
+def compute_hessian(loss, model, scale_factor=1e3):
+    """
+    Computes an approximation of the Hessian for each trainable parameter in the model.
+    - Skips parameters without gradients.
+    - Multiplies the Hessian by a scale factor to amplify differences.
+    
+    Returns:
+        hessian_dict: Dictionary mapping parameter names to their approximated Hessian.
+    """
+    hessian_dict = {}
+    for name, param in model.named_parameters():
+        if param.requires_grad and param.grad is not None:
+            try:
+                # Using torch.autograd.functional.hessian for the Hessian w.r.t. param
+                hess_matrix = torch.autograd.functional.hessian(
+                    lambda x: torch.autograd.grad(loss, [x], retain_graph=True, allow_unused=True)[0].sum()
+                    if torch.autograd.grad(loss, [x], retain_graph=True, allow_unused=True)[0] is not None
+                    else torch.tensor(0.0, device=loss.device),
+                    param
+                )
+                # Scale for better discrimination
+                hess_matrix = hess_matrix * scale_factor
+                hessian_dict[name] = hess_matrix
+            except RuntimeError as e:
+                print(f"Skipping Hessian computation for {name} due to error: {e}")
+                continue
+    return hessian_dict
+
+
+def hessian_based_pruner(
+    original_model,
+    model,
+    device,
+    train_loader,
+    pruning_percentage=0.2
+):
+    """
+    Prunes 'model' in-place using a Hessian-based Importance approach,
+    but slices final pruned/unpruned weights from 'original_model' for 
+    verification and storage.
+
+    Parameters:
+        original_model (nn.Module): The unpruned reference model (for indexing & verification).
+        model (nn.Module): The PyTorch model to be pruned in-place.
+        device (torch.device): The computing device (CPU/MPS/CUDA).
+        train_loader (DataLoader): Training data for computing Hessian approximations.
+        pruning_percentage (float): Global percentage of channels to prune (0.0 - 1.0).
+
+    Returns:
+        (pruned_model, pruned_and_unpruned_info) tuple:
+           pruned_model: The pruned model (on 'device').
+           pruned_and_unpruned_info: dict containing pruned/unpruned indices, slices, etc.
+    """
+    model.to(device)
+    model.train()
+    
+    # Example input used by the pruner for shape inference
+    example_inputs = torch.randn(1, 3, 32, 32, dtype=torch.float32, device=device)
+    
+    # Define Hessian-based Importance
+    imp = tp.importance.HessianImportance()
+
+    # Identify layers to ignore (e.g. final linear for classification)
+    ignored_layers = []
+    for m in model.modules():
+        if isinstance(m, nn.Linear) and m.out_features == 10:
+            ignored_layers.append(m)
+
+    # We'll create a MetaPruner for global, Hessian-based pruning
+    pruner = tp.pruner.MetaPruner(
+        model,
+        example_inputs=example_inputs,
+        importance=imp,
+        pruning_ratio=pruning_percentage,
+        ignored_layers=ignored_layers
+    )
+
+    # ---------------------------
+    # 1) Compute Hessian Approximations
+    # ---------------------------
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    criterion = nn.CrossEntropyLoss()
+
+    # We'll do a few mini-batches to accumulate a stable Hessian approximation
+    hessian_info = {}
+    for i, (inputs, targets) in enumerate(train_loader):
+        inputs, targets = inputs.to(device), targets.to(device)
+        optimizer.zero_grad()
+        output = model(inputs)
+        loss = criterion(output, targets)
+        loss.backward()  # compute first-order gradients
+
+        # After some mini-batches, compute Hessian from this 'loss'
+        # If you only want to do it once, break after first iteration
+        if i == 3:  
+            hessian_info = compute_hessian(loss, model, scale_factor=1e3)
+            break
+
+    # Attach Hessian info to parameters so the pruner can use it
+    for name, param in model.named_parameters():
+        if name in hessian_info:
+            param.hessian = hessian_info[name]
+
+    # ---------------------------
+    # 2) Prune & Collect Indices
+    # ---------------------------
+    pruned_info = {}
+    num_pruned_channels = {}
+
+    # We'll do a single step of global pruning
+    for group in pruner.step(interactive=True):
+        for dep, idxs in group:
+            target_layer = dep.target.module
+            pruning_fn   = dep.handler
+
+            # Identify the layer name
+            layer_name = None
+            for n, mod in model.named_modules():
+                if mod is target_layer:
+                    layer_name = n
+                    break
+            if layer_name is None:
+                continue
+
+            if layer_name.startswith("model."):
+                layer_name = layer_name[len("model."):]
+
+            # Only handle Conv2d
+            if not isinstance(target_layer, nn.Conv2d):
+                continue
+
+            if layer_name not in pruned_info:
+                pruned_info[layer_name] = {'pruned_dim0': [], 'pruned_dim1': []}
+                num_pruned_channels[layer_name] = (0, 0)
+
+            if pruning_fn in [tp.prune_conv_out_channels]:
+                pruned_info[layer_name]['pruned_dim0'].extend(idxs)
+            elif pruning_fn in [tp.prune_conv_in_channels]:
+                pruned_info[layer_name]['pruned_dim1'].extend(idxs)
+
+        # Actually prune in-place
+        group.prune()
+
+    # ---------------------------
+    # 3) Deduplicate Pruned Indices
+    # ---------------------------
+    module_dict = dict(original_model.named_modules())
+    for ln, dims_dict in pruned_info.items():
+        dims_dict['pruned_dim0'] = sorted(set(dims_dict['pruned_dim0']))
+        dims_dict['pruned_dim1'] = sorted(set(dims_dict['pruned_dim1']))
+        out_pruned_count = len(dims_dict['pruned_dim0'])
+        in_pruned_count  = len(dims_dict['pruned_dim1'])
+        num_pruned_channels[ln] = (out_pruned_count, in_pruned_count)
+
+    print("[Hessian Pruning] num_pruned_channels:", num_pruned_channels)
+
+    # ---------------------------
+    # 4) Compute Unpruned Indices from Original Model
+    # ---------------------------
+    unpruned_info = {}
+    for layer_name, dims_dict in pruned_info.items():
+        orig_layer = module_dict.get(layer_name, None)
+        if not orig_layer or not isinstance(orig_layer, nn.Conv2d):
+            continue
+
+        out_channels = orig_layer.weight.shape[0]
+        in_channels  = orig_layer.weight.shape[1]
+
+        pruned_out = set(dims_dict['pruned_dim0'])
+        pruned_in  = set(dims_dict['pruned_dim1'])
+
+        all_out = set(range(out_channels))
+        all_in  = set(range(in_channels))
+
+        unpruned_out = sorted(all_out - pruned_out)
+        unpruned_in  = sorted(all_in  - pruned_in)
+
+        unpruned_info[layer_name] = {
+            'unpruned_dim0': unpruned_out,
+            'unpruned_dim1': unpruned_in
+        }
+
+    # For any Conv2d not pruned at all
+    for name, mod in module_dict.items():
+        if isinstance(mod, nn.Conv2d) and name not in pruned_info:
+            out_channels = mod.weight.shape[0]
+            in_channels  = mod.weight.shape[1]
+            unpruned_info[name] = {
+                'unpruned_dim0': list(range(out_channels)),
+                'unpruned_dim1': list(range(in_channels))
+            }
+            num_pruned_channels[name] = (0, 0)
+
+    # Build num_unpruned_channels
+    num_unpruned_channels = {}
+    for ln, dims_dict in unpruned_info.items():
+        num_out = len(dims_dict['unpruned_dim0'])
+        num_in  = len(dims_dict['unpruned_dim1'])
+        num_unpruned_channels[ln] = (num_out, num_in)
+
+    # ---------------------------
+    # 5) Slice Pruned & Unpruned Weights from Original Model
+    # ---------------------------
+    pruned_weights = {}
+    unpruned_weights = {}
+
+    for layer_name in sorted(set(list(pruned_info.keys()) + list(unpruned_info.keys()))):
+        layer = module_dict.get(layer_name, None)
+        if not layer or not isinstance(layer, nn.Conv2d):
+            continue
+
+        w = layer.weight.detach()
+
+        # Pruned
+        pd0 = pruned_info.get(layer_name, {}).get('pruned_dim0', [])
+        pd1 = pruned_info.get(layer_name, {}).get('pruned_dim1', [])
+        if pd0 or pd1:
+            if pd0 and pd1:
+                pruned_weights[layer_name] = w[pd0][:, pd1, :, :].clone()
+            elif pd0:
+                pruned_weights[layer_name] = w[pd0].clone()
+            elif pd1:
+                pruned_weights[layer_name] = w[:, pd1].clone()
+            else:
+                pruned_weights[layer_name] = torch.empty((0,))
+        else:
+            pruned_weights[layer_name] = torch.empty((0,))
+
+        # Unpruned
+        ud0 = unpruned_info[layer_name]['unpruned_dim0']
+        ud1 = unpruned_info[layer_name]['unpruned_dim1']
+        if ud0 or ud1:
+            if ud0 and ud1:
+                unpruned_weights[layer_name] = w[ud0][:, ud1, :, :].clone()
+            elif ud0:
+                unpruned_weights[layer_name] = w[ud0].clone()
+            elif ud1:
+                unpruned_weights[layer_name] = w[:, ud1].clone()
+            else:
+                unpruned_weights[layer_name] = torch.empty((0,))
+        else:
+            unpruned_weights[layer_name] = torch.empty((0,))
+
+    # ---------------------------
+    # 6) (Optional) Verification
+    # ---------------------------
+    # from your code: verify_pruned_slices, verify_unpruned_slices
+    # verify_pruned_slices(module_dict, pruned_info, pruned_weights)
+    # verify_unpruned_slices(module_dict, unpruned_info, unpruned_weights)
+
+    # ---------------------------
+    # 7) Return Results
+    # ---------------------------
+    pruned_and_unpruned_info = {
+        "pruned_info": pruned_info,
+        "num_pruned_channels": num_pruned_channels,
+        "pruned_weights": pruned_weights,
+        "unpruned_info": unpruned_info,
+        "num_unpruned_channels": num_unpruned_channels,
+        "unpruned_weights": unpruned_weights
+    }
+
+    return model, pruned_and_unpruned_info
 
 def get_unpruned_info_high_level(model, pruned_info):
     """
@@ -1110,13 +1762,13 @@ def VGG_General(channel_dict, variant="VGG16"):
     return VGG(conv_config)
 
 
-def calculate_last_conv_out_features(pruned_model, input_size=(1, 3, 224, 224)):
+def calculate_last_conv_out_features(pruned_model, input_size=(1, 3, 32, 32)):
     """
     Dynamically calculate the output features of the last convolutional layer after AdaptiveAvgPool2d.
     
     Parameters:
     - pruned_model: The pruned model with its layers.
-    - input_size: The size of the input tensor (default: (1, 3, 224, 224)).
+    - input_size: The size of the input tensor (default: (1, 3, 32, 32)).
     
     Returns:
     - last_conv_out_features: The number of features for the first Linear layer.
@@ -1587,7 +2239,7 @@ def fine_tuner_zerograd(model, train_loader, val_loader, freeze_dim0, freeze_dim
     model = model.to(device)
     # Define loss function and optimizer
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=LR)
+    optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=1e-3)
     
     # Define LR scheduler
     if scheduler_type == 'step':
@@ -1597,7 +2249,7 @@ def fine_tuner_zerograd(model, train_loader, val_loader, freeze_dim0, freeze_dim
     elif scheduler_type == 'cyclic':
         scheduler = CyclicLR(optimizer, base_lr=1e-6, max_lr=1e-3, step_size_up=20, mode='triangular2')
     else:
-        scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
+        scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
     train_losses = []
     train_accuracies = []

@@ -11,10 +11,70 @@ from utils.eval_utils import evaluate_model, count_parameters, model_size_in_mb
 # from utils.device_utils import get_device
 from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, high_level_pruner, VGG_General, fine_tuner_zerograd, reconstruct_Global_weights_from_dicts, high_level_prunerTaylor, hessian_based_pruner
 
+def verify_reconstructed_weights(rebuilt_model, pruned_info, pruned_weights, unpruned_info, unpruned_weights):
+    """
+    Verifies that weights in the rebuilt model match the expected pruned and unpruned weights.
+
+    Parameters:
+    - rebuilt_model: The model that has been rebuilt and had weights reassigned.
+    - pruned_info: dict mapping layer names to {'pruned_dim0': [...], 'pruned_dim1': [...]}
+    - pruned_weights: dict of stored pruned weights per layer
+    - unpruned_info: dict mapping layer names to {'unpruned_dim0': [...], 'unpruned_dim1': [...]}
+    - unpruned_weights: dict of stored unpruned weights per layer
+    """
+    for name, layer in rebuilt_model.named_modules():
+        if not isinstance(layer, nn.Conv2d):
+            continue
+
+        layer_weights = layer.weight.detach().cpu()
+
+        if name in pruned_info and name in pruned_weights:
+            pd0 = pruned_info[name]['pruned_dim0']
+            pd1 = pruned_info[name]['pruned_dim1']
+            if pruned_weights[name].numel() > 0:
+                if pd0 and pd1:
+                    inserted_slice = layer_weights[pd0][:, pd1, :, :]
+                    expected_slice = pruned_weights[name].cpu()
+                elif pd0:
+                    inserted_slice = layer_weights[pd0]
+                    expected_slice = pruned_weights[name].cpu()
+                elif pd1:
+                    inserted_slice = layer_weights[:, pd1]
+                    expected_slice = pruned_weights[name].cpu()
+                else:
+                    continue
+
+                if torch.allclose(inserted_slice, expected_slice, atol=1e-6):
+                    print(f"[Match ✅] Pruned weights correctly inserted for layer: {name}")
+                else:
+                    print(f"[Mismatch ❌] Pruned weights incorrect for layer: {name}")
+
+        if name in unpruned_info and name in unpruned_weights:
+            ud0 = unpruned_info[name]['unpruned_dim0']
+            ud1 = unpruned_info[name]['unpruned_dim1']
+            if unpruned_weights[name].numel() > 0:
+                if ud0 and ud1:
+                    inserted_slice = layer_weights[ud0][:, ud1, :, :]
+                    expected_slice = unpruned_weights[name].cpu()
+                elif ud0:
+                    inserted_slice = layer_weights[ud0]
+                    expected_slice = unpruned_weights[name].cpu()
+                elif ud1:
+                    inserted_slice = layer_weights[:, ud1]
+                    expected_slice = unpruned_weights[name].cpu()
+                else:
+                    continue
+
+                if torch.allclose(inserted_slice, expected_slice, atol=1e-6):
+                    print(f"[Match ✅] Unpruned weights correctly inserted for layer: {name}")
+                else:
+                    print(f"[Mismatch ❌] Unpruned weights incorrect for layer: {name}")
+
 
 
 def main(schedulers, lrs, epochs):
-    wandb.init(project='VGG_depGraph', name=f'hessian{lrs}')
+    print("HIGH LEVEL PRUNER TAYLOR IMPORTANCE")
+    wandb.init(project='VGG_HighLevel', name=f'Magnitude{lrs}')
     wandb_logger = WandbLogger(log_model=False)
 
     device = get_device()
@@ -22,8 +82,8 @@ def main(schedulers, lrs, epochs):
     model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_vgg16_bn", pretrained=True).to(device)
     print("MODEL BEFORE PRUNING", model)
 
-    # pruning_percentages = [0.3, 0.5, 0.7, 0.9]
-    pruning_percentages = [0.5]
+    pruning_percentages = [0.3, 0.5, 0.7]
+    # pruning_percentages = [0.2]
 
     metrics_pruned = {
         "pruning_percentage": [], "LR": [], "scheduler": [], "epochs" : [], "test_accuracy": [], "count_params": [], "model_size": []
@@ -77,6 +137,14 @@ def main(schedulers, lrs, epochs):
         rebuilt_model = VGG_General(new_channels).to(device)
         get_core_weights(core_model, pruned_and_unpruned_info["unpruned_weights"])
         rebuilt_model, freeze_dim0, freeze_dim1 = reconstruct_Global_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
+        verify_reconstructed_weights(
+            rebuilt_model,
+            pruned_info=pruned_and_unpruned_info["pruned_info"],
+            pruned_weights=pruned_and_unpruned_info["pruned_weights"],
+            unpruned_info=pruned_and_unpruned_info["unpruned_info"],
+            unpruned_weights=pruned_and_unpruned_info["unpruned_weights"]
+        )
+
         # rebuilt_model = freeze_channels(rebuilt_model, pruned_and_unpruned_info["unpruned_info"])
         rebuilt_model = rebuilt_model.to(device).to(torch.float32)
 
@@ -134,7 +202,7 @@ if __name__ == "__main__":
     # schedulers = ['exponential', 'cyclic', 'Default']
     # schedulers = ['cosine', 'step', 'exponential', 'cyclic', 'Default']
     # lrs = [1e-2, 1e-3, 1e-4, 1e-5]
-    lrs = [1e-2, 1e-3]
+    lrs = [1e-3]
     epochs = [100]
     model_name = "VGG"
 

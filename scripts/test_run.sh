@@ -9,7 +9,7 @@
 #SBATCH --gres=gpu:a100:1                        # Request one A100 GPU
 #SBATCH --mem=120G                               # Memory pool
 #SBATCH --time=1-00:00:00                           # 2 days, 0 hours, 0 minutes, 0 seconds
-#SBATCH --partition=gpu                          # GPU partition to submit to
+#SBATCH --partition=gpu_a100                          # GPU partition to submit to
 
 # Load modules
 module load 2023

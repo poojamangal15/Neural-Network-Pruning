@@ -14,6 +14,8 @@ from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, ge
 
 
 def main(schedulers, lrs, epochs):
+    print("SOFT PRUNING ALEXNET")
+
     wandb.init(project='VGG_softPruning', name='softpruning')
     wandb_logger = WandbLogger(log_model=False)
 
@@ -22,8 +24,8 @@ def main(schedulers, lrs, epochs):
     model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_vgg16_bn", pretrained=True).to(device)
     print("MODEL BEFORE PRUNING", model)
 
-    # pruning_percentages = [0.2, 0.4, 0.6, 0.8]
-    pruning_percentages = [0.5]
+    pruning_percentages = [0.3, 0.5, 0.7]
+    # pruning_percentages = [0.5]
 
     metrics_pruned = {
         "pruning_percentage": [], "LR": [], "scheduler": [], "epochs" : [], "test_accuracy": [], "count_params": [], "model_size": []
@@ -128,7 +130,7 @@ if __name__ == "__main__":
     # schedulers = ['exponential', 'cyclic', 'Default']
     # schedulers = ['cosine', 'step', 'exponential', 'cyclic', 'Default']
     # lrs = [1e-2, 1e-3, 1e-4, 1e-5]
-    lrs = [1e-2, 1e-3]
+    lrs = [1e-3]
     epochs = [100]
     model_name = "VGG"
 
