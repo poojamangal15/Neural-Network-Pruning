@@ -72,7 +72,7 @@ def verify_reconstructed_weights(rebuilt_model, pruned_info, pruned_weights, unp
 
 
 def main(schedulers, lrs, epochs):
-    print("DEP GRAPH PRUNER RESNET")
+    print("DEP GRAPH PRUNER RESNET HALF CHANNELS")
     wandb.init(project='resnet20_depGraph', name='basic_dependency')
     wandb_logger = WandbLogger(log_model=False)
 
@@ -105,7 +105,6 @@ def main(schedulers, lrs, epochs):
         # Prune the model
         core_model, pruned_and_unpruned_info = prune_model(model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
         core_model = core_model.to(device)
-
         print("Core model", core_model)
         # Count parameters after pruning
         pruned_params = count_parameters(core_model)
@@ -121,7 +120,7 @@ def main(schedulers, lrs, epochs):
 
         # Fine-tune the pruned model using the method from DepGraphFineTuner
         print("Starting post-pruning fine-tuning of the pruned model...")
-        # fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "pruning", epochs=epochs, scheduler_type=schedulers, LR=lrs)
+        fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "pruning", epochs=epochs, scheduler_type=schedulers, LR=lrs)
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
 
         wandb.log({
@@ -160,7 +159,7 @@ def main(schedulers, lrs, epochs):
         })
 
         print("Starting post-rebuilding fine-tuning of the pruned model...")
-        # fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "rebuild", epochs=epochs, scheduler_type=schedulers, LR=lrs)
+        fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "rebuild", epochs=epochs, scheduler_type=schedulers, LR=lrs)
 
         rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
 

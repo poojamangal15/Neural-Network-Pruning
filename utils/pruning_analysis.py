@@ -106,23 +106,23 @@ def prune_model(original_model, model, device, pruning_percentage=0.2):
     DG = tp.DependencyGraph().build_dependency(model, example_inputs)
     layers_to_prune = {
         "layer1.0.conv1": model.layer1[0].conv1,
-        "layer1.0.conv2": model.layer1[0].conv2,
+        # "layer1.0.conv2": model.layer1[0].conv2,
         "layer1.1.conv1": model.layer1[1].conv1,
-        "layer1.1.conv2": model.layer1[1].conv2,
+        # "layer1.1.conv2": model.layer1[1].conv2,
         "layer1.2.conv1": model.layer1[2].conv1,
-        "layer1.2.conv2": model.layer1[2].conv2,
+        # "layer1.2.conv2": model.layer1[2].conv2,
         "layer2.0.conv1": model.layer2[0].conv1,
-        "layer2.0.conv2": model.layer2[0].conv2,
+        # "layer2.0.conv2": model.layer2[0].conv2,
         "layer2.1.conv1": model.layer2[1].conv1,
-        "layer2.1.conv2": model.layer2[1].conv2,
+        # "layer2.1.conv2": model.layer2[1].conv2,
         "layer2.2.conv1": model.layer2[2].conv1,
-        "layer2.2.conv2": model.layer2[2].conv2,
+        # "layer2.2.conv2": model.layer2[2].conv2,
         "layer3.0.conv1": model.layer3[0].conv1,
-        "layer3.0.conv2": model.layer3[0].conv2,
+        # "layer3.0.conv2": model.layer3[0].conv2,
         "layer3.1.conv1": model.layer3[1].conv1,
-        "layer3.1.conv2": model.layer3[1].conv2,
+        # "layer3.1.conv2": model.layer3[1].conv2,
         "layer3.2.conv1": model.layer3[2].conv1,
-        "layer3.2.conv2": model.layer3[2].conv2,
+        # "layer3.2.conv2": model.layer3[2].conv2,
     }
 
 
@@ -214,7 +214,7 @@ def high_level_pruner(original_model, model, device, pruning_percentage=0.2):
         importance=imp,
         iterative_steps=iterative_steps,
         pruning_ratio=pruning_percentage,
-        global_pruning=True,
+        # global_pruning=True,
         ignored_layers=ignored_layers,
     )
 

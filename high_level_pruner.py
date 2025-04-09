@@ -75,7 +75,7 @@ def verify_reconstructed_weights(rebuilt_model, pruned_info, pruned_weights, unp
 
 
 def main(schedulers, lrs, epochs):
-    print("RESNET HIGH LEVEL PRUNER HESSIAN IMPORTANCE")
+    print("RESNET HIGH LEVEL PRUNER MAGNITUDE NO GLOBAL")
     wandb.init(project='resNet_depGraph', name=f'hessian_high_level')
     wandb_logger = WandbLogger(log_model=False)
 
@@ -108,9 +108,9 @@ def main(schedulers, lrs, epochs):
         print(f"Applying {pruning_percentage * 100}% pruning...")
         model_to_be_pruned = copy.deepcopy(model)
         # Prune the model
-        # core_model, pruned_and_unpruned_info = high_level_pruner(model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
+        core_model, pruned_and_unpruned_info = high_level_pruner(model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
         # core_model, pruned_and_unpruned_info = high_level_prunerTaylor(model, model_to_be_pruned, device, train_dataloader,pruning_percentage=pruning_percentage)
-        core_model, pruned_and_unpruned_info = hessian_based_pruner(model, model_to_be_pruned, device, train_dataloader, pruning_percentage=pruning_percentage)
+        # core_model, pruned_and_unpruned_info = hessian_based_pruner(model, model_to_be_pruned, device, train_dataloader, pruning_percentage=pruning_percentage)
         core_model = core_model.to(device)
         print("core model", core_model)
         # torch.onnx.export(core_model, (torch.rand(1, 3, 32, 32).to(device),), "resNet_coreModel.onnx")
