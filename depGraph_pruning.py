@@ -74,7 +74,7 @@ def verify_reconstructed_weights(rebuilt_model, pruned_info, pruned_weights, unp
 
 def main(schedulers, lrs, epochs):
 
-    print("ALEXNET DEPGRAPH PRUNING ALL CONV LAYERS CHANGED LR")
+    print("ALEXNET DEPGRAPH PRUNING ALL LAYERS FINE TUNING CHANGE 5e-4")
     wandb.init(project='alexnet_depGraph', name='LR_Change')
     wandb_logger = WandbLogger(log_model=False)
 
@@ -158,7 +158,7 @@ def main(schedulers, lrs, epochs):
         })
 
         print("Starting post-rebuilding fine-tuning of the pruned model...")
-        fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "rebuild", epochs=epochs, scheduler_type=schedulers, LR=1e-5)
+        fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "rebuild", epochs=epochs, scheduler_type=schedulers, LR=5e-4)
 
         rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
 
