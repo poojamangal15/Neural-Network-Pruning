@@ -9,11 +9,12 @@ import torch.nn as nn
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model, count_parameters, model_size_in_mb
 # from utils.device_utils import get_device
-from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, Resnet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, copy_weights_from_dict, soft_pruning
+from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, Resnet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, copy_weights_from_dict, soft_pruning, reconstruct_Global_weights_from_dicts, fine_tuner_zerograd
 
 
 
-def main(schedulers):
+def main(schedulers, lrs, epochs):
+    print("SOFT PRUNING RESNET")
     wandb.init(project='ResNet_softPruning', name='ResNetSoftPrune')
     wandb_logger = WandbLogger(log_model=False)
 
@@ -22,14 +23,14 @@ def main(schedulers):
     model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_resnet20", pretrained=True).to(device)
     print("MODEL BEFORE PRUNING", model)
 
-    # pruning_percentages = [0.2, 0.4, 0.6, 0.8]
-    pruning_percentages = [0.2]
+    pruning_percentages = [0.3, 0.5, 0.7]
+    # pruning_percentages = [0.2]
 
     metrics_pruned = {
-        "pruning_percentage": [], "scheduler": [], "test_accuracy": [], "count_params": [], "model_size": []
+        "pruning_percentage": [], "LR": [], "scheduler": [], "epochs" : [], "test_accuracy": [], "count_params": [], "model_size": []
     }
     metrics_rebuild = {
-        "pruning_percentage": [], "scheduler": [], "test_accuracy": [], "count_params": [], "model_size": []
+        "pruning_percentage": [], "LR": [], "scheduler": [], "epochs" : [], "test_accuracy": [], "count_params": [], "model_size": []
     }
 
     train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
@@ -57,7 +58,7 @@ def main(schedulers):
         pruned_model_size = model_size_in_mb(core_model)
 
         print("Starting post-pruning fine-tuning of the pruned model...")
-        # fine_tuner(core_model, train_dataloader, val_dataloader, device, fineTuningType = "pruning", epochs=5, scheduler_type=schedulers, LR=1e-4)
+        fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage, fineTuningType = "pruning", epochs=epochs, scheduler_type=schedulers, LR=lrs)
         pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
 
         new_channels = extend_channels(core_model, pruned_and_unpruned_info["num_pruned_channels"])        
@@ -65,7 +66,7 @@ def main(schedulers):
 
         rebuilt_model = Resnet_General(new_channels).to(device)
         get_core_weights(core_model, pruned_and_unpruned_info["unpruned_weights"])
-        rebuilt_model = reconstruct_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
+        rebuilt_model, freeze_dim0, freeze_dim1 = reconstruct_Global_weights_from_dicts(rebuilt_model, pruned_indices=pruned_and_unpruned_info["pruned_info"], pruned_weights=pruned_and_unpruned_info["pruned_weights"], unpruned_indices=pruned_and_unpruned_info["unpruned_info"], unpruned_weights=pruned_and_unpruned_info["unpruned_weights"])
         # rebuilt_model = freeze_channels(rebuilt_model, pruned_and_unpruned_info["unpruned_info"])
         rebuilt_model = rebuilt_model.to(device).to(torch.float32)
 
@@ -75,7 +76,7 @@ def main(schedulers):
         rebuild_model_size = model_size_in_mb(rebuilt_model)
 
         print("Starting post-rebuilding fine-tuning of the pruned model...")
-        # fine_tuner(rebuilt_model, train_dataloader, val_dataloader, device, fineTuningType="rebuild", epochs=5, scheduler_type=schedulers, LR=1e-4)
+        fine_tuner_zerograd(rebuilt_model, train_dataloader, val_dataloader, freeze_dim0, freeze_dim1, device, pruning_percentage, fineTuningType="rebuild", epochs=epochs, scheduler_type=schedulers, LR=lrs)
 
         rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
 
@@ -86,7 +87,8 @@ def main(schedulers):
             sum(p.numel() for p in core_model.parameters() if p.requires_grad)
         )
         metrics_pruned['model_size'].append(pruned_model_size)
-
+        metrics_pruned['LR'].append(lrs)
+        metrics_pruned['epochs'].append(epochs)
 
         metrics_rebuild["pruning_percentage"].append(pruning_percentage * 100)
         metrics_rebuild["scheduler"].append(schedulers)
@@ -95,6 +97,8 @@ def main(schedulers):
             sum(p.numel() for p in rebuilt_model.parameters() if p.requires_grad)
         )
         metrics_rebuild['model_size'].append(rebuild_model_size)
+        metrics_rebuild['LR'].append(lrs)
+        metrics_rebuild['epochs'].append(epochs)
 
 
         wandb.log({
@@ -119,6 +123,14 @@ def main(schedulers):
 
 if __name__ == "__main__":
     schedulers = ['cosine']
-    # schedulers = ['cosine', 'step', 'exponential', 'cyclic']
+    # schedulers = ['exponential', 'cyclic', 'Default']
+    # schedulers = ['cosine', 'step', 'exponential', 'cyclic', 'Default']
+    # lrs = [1e-2, 1e-3, 1e-4, 1e-5]
+    lrs = [1e-3]
+    epochs = [100]
+    model_name = "ResNet20"
+
     for sch in schedulers:
-        main(schedulers=sch)
+        for lr in lrs:
+            for epoch in epochs:
+                 main(schedulers=sch, lrs=lr, epochs=epoch)
