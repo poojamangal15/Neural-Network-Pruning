@@ -75,7 +75,7 @@ def verify_reconstructed_weights(rebuilt_model, pruned_info, pruned_weights, unp
 
 
 def main(schedulers, lrs, epochs):
-    print("RESNET HIGH LEVEL PRUNER MAGNITUDE NO GLOBAL")
+    print("RESNET HIGH LEVEL PRUNER MAGNITUDE NO GLOBAL WITH COSINE RESTART")
     wandb.init(project='resNet_depGraph', name=f'hessian_high_level')
     wandb_logger = WandbLogger(log_model=False)
 

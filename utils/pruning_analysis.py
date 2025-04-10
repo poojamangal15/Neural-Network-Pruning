@@ -1335,7 +1335,7 @@ def soft_pruning(original_model, model, device, pruning_percentage=0.2, layer_pr
         model,
         example_inputs,
         importance=imp,
-        global_pruning=True,
+        # global_pruning=True,
         iterative_steps=iterative_steps,
         pruning_ratio=pruning_percentage, 
         ignored_layers=ignored_layers,
@@ -2317,6 +2317,13 @@ def fine_tuner_zerograd(model, train_loader, val_loader, freeze_dim0, freeze_dim
         scheduler = ExponentialLR(optimizer, gamma=0.95)
     elif scheduler_type == 'cyclic':
         scheduler = CyclicLR(optimizer, base_lr=1e-6, max_lr=1e-3, step_size_up=20, mode='triangular2')
+    elif scheduler_type == 'cosine_restart':
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=10,       # First restart after 10 epochs
+            T_mult=1,     # Keep all cycles 10 epochs long
+            eta_min=1e-6  # Minimum LR value
+        )
     else:
         scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
@@ -2362,7 +2369,12 @@ def fine_tuner_zerograd(model, train_loader, val_loader, freeze_dim0, freeze_dim
         train_accuracies.append(epoch_accuracy)
         
         # Step the scheduler and track learning rate
-        scheduler.step()
+        if scheduler_type == 'cosine_restart':
+            scheduler.step(epoch + 1)
+        else:
+            scheduler.step()
+
+        # scheduler.step()
         current_lr = scheduler.get_last_lr()[0]
         lrs.append(current_lr)
         

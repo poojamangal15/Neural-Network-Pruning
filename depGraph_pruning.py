@@ -96,7 +96,10 @@ def main(schedulers, lrs, epochs):
     orig_params = count_parameters(model)
     orig_accuracy = evaluate_model(model, test_dataloader, device)
     print("Initial accuracy", orig_accuracy)
+    print("INITIAL PARAMS", orig_params)
     pruned_model_size = model_size_in_mb(model)
+    print("INITIAL MODEL SIZE", pruned_model_size)
+
 
     for pruning_percentage in pruning_percentages:
         print(f"Applying {pruning_percentage * 100}% pruning...")

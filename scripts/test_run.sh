@@ -23,10 +23,10 @@ source venv/bin/activate
 cd $SLURM_SUBMIT_DIR
 
 # Run your script
-python high_level_pruner.py
+# python high_level_pruner.py
 # python iterative_pruning.py
 # python depGraph_pruning.py
-# python softPruning.py
+python softPruning.py
 
 
 #SBATCH --time=2-00:00:00   # D-HH:MM:SS

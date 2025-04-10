@@ -14,7 +14,7 @@ from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, ge
 
 
 def main(schedulers, lrs, epochs):
-    print("SOFT PRUNING RESNET")
+    print("SOFT PRUNING RESNET WITHOUT GLOBAL ON")
     wandb.init(project='ResNet_softPruning', name='ResNetSoftPrune')
     wandb_logger = WandbLogger(log_model=False)
 
