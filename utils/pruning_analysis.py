@@ -1724,7 +1724,6 @@ def get_rebuild_channels(unpruned_channels, pruned_channels):
 def get_core_weights(pruned_model, unpruned_weights):
     for name, module in pruned_model.named_modules():
         if isinstance(module, nn.Conv2d):
-            print("UNPRUNED WEIGHTS NAME", name)
             unpruned_weights[name] = module.weight.data
 
 class AlexNet_general(nn.Module):
