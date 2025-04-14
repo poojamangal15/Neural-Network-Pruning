@@ -9,7 +9,7 @@ import torch.nn as nn
 from utils.data_utils import load_data
 from utils.eval_utils import evaluate_model, count_parameters, model_size_in_mb
 # from utils.device_utils import get_device
-from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, high_level_pruner, VGG_General, reconstruct_Global_weights_from_dicts, fine_tuner_zerograd
+from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, high_level_pruner, VGG_General, reconstruct_Global_weights_from_dicts, fine_tuner_zerograd, soft_pruning, copy_weights_from_dict
 
 
 # Iterative pruning approach: Prune all steps then do a reverse rebuilding
@@ -22,7 +22,7 @@ def iterative_depgraph_pruning(
     prune_ratios=[0.2, 0.2, 0.2],
     fine_tune_epochs=5,
     fine_tune_lr=1e-4,
-    schedulers='cosine',
+    schedulers = 'cosine',
     rebuild=True
 ):
     """
@@ -33,10 +33,10 @@ def iterative_depgraph_pruning(
     - rebuild: Whether to rebuild the model after each pruning step or only at the end.
     """
 
-    # Evaluate original
     orig_params = count_parameters(model)
-    orig_acc = evaluate_model(model, test_dataloader, device)
-    orig_size_mb = model_size_in_mb(model)
+    orig_accuracy = evaluate_model(model, test_dataloader, device)
+    print("Initial accuracy", orig_accuracy)
+    orig_model_size = model_size_in_mb(model)
 
 
     pruned_models_info = []
@@ -49,9 +49,9 @@ def iterative_depgraph_pruning(
     unprune_meta_data = []
     iteration_results.append({
         "step": "original",
-        "acc": orig_acc,
+        "acc": orig_accuracy,
         "params": orig_params,
-        "size_mb": orig_size_mb
+        "size_mb": orig_model_size
     })
 
     models = []
@@ -61,14 +61,21 @@ def iterative_depgraph_pruning(
     for i, ratio in enumerate(prune_ratios, start=1):
         print(f"\n[Forward] Iteration {i}/{len(prune_ratios)}, Prune ratio={ratio}")
         
-
+        print("STEP RATIO------", i, ratio)
         # 1) Prune
-        core_model, pruned_and_unpruned_info = high_level_pruner(
+        pruned_model, pruned_and_unpruned_info = high_level_pruner(
             original_model=prev_model,
             model=current_model,
             device=device,
             pruning_percentage=ratio
         )
+
+        pruned_model = pruned_model.to(device)
+
+        core_model = VGG_General(pruned_and_unpruned_info['num_unpruned_channels']).to(device)
+        copy_weights_from_dict(core_model, pruned_and_unpruned_info['unpruned_weights'])
+        print("coremodel", core_model)
+        
         models.append(copy.deepcopy(core_model))
        # 2) Evaluate after pruning
         pruned_params = count_parameters(core_model)
@@ -82,8 +89,8 @@ def iterative_depgraph_pruning(
         prev_model = copy.deepcopy(core_model)
     
         # 3) Fine tune
-        print(f"[Iterative] Fine-tuning pruned model for {fine_tune_epochs} epochs.")
-    # fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage=ratio, fineTuningType = "pruning", epochs=fine_tune_epochs, scheduler_type=schedulers, LR=fine_tune_lr)
+    print(f"[Iterative] Fine-tuning pruned model for {fine_tune_epochs} epochs.")
+    fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage = ratio, fineTuningType = "pruning", epochs=fine_tune_epochs, scheduler_type=schedulers, LR=fine_tune_lr)
 
     # Evaluate after fine tuning
     pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
@@ -107,25 +114,14 @@ def iterative_depgraph_pruning(
             # print("MODEL_state prev", model_state_prev)
             # print("MODEL_state pruned", model_state_pruned)
             new_channels = extend_channels(model_state_pruned, prune_meta_data[step_idx]["num_pruned_channels"])
-            # print("NEW CHANNELS-------------->", new_channels)
-            # new_channels = get_rebuild_channels(unprune_meta_data[step_idx]["num_unpruned_channels"], prune_meta_data[step_idx]["num_pruned_channels"])
-
-            # b) Construct a fresh "AlexNet_General"
+            
+            # b) Construct a fresh "ResNet"
             rebuilt_model = VGG_General(new_channels).to(device)
             # print("temp rebuilt", rebuilt_model)
             # c) Copy core weights
             get_core_weights(model_state_pruned, unprune_meta_data[step_idx]["unpruned_weights"])
 
             # d) Reconstruct from pruned + unpruned
-            # Choose one layer to inspect
-            inspect_layer = "features.3" 
-
-            if inspect_layer in prune_meta_data[step_idx]["pruned_weights"]:
-                print(f"\n🔍 BEFORE REBUILD: Inspecting weights from pruned model: {inspect_layer}")
-                print("→ Pruned weight shape:", prune_meta_data[step_idx]["pruned_weights"][inspect_layer].shape)
-                print("→ Example values (first 2 weights):")
-                print(prune_meta_data[step_idx]["pruned_weights"][inspect_layer][:2, :2])  # First 2x2 weights
-
             rebuilt_model, freeze_dim0, freeze_dim1 = reconstruct_Global_weights_from_dicts(
                 rebuilt_model,
                 pruned_indices=prune_meta_data[step_idx]["pruned_info"],
@@ -134,42 +130,23 @@ def iterative_depgraph_pruning(
                 unpruned_weights=unprune_meta_data[step_idx]["unpruned_weights"]
             )
 
-            rebuilt_conv_layer = dict(rebuilt_model.named_modules())[inspect_layer]
-            print(f"\n✅ AFTER REBUILD: Checking assigned weights for {inspect_layer}")
-            print("→ Rebuilt weight shape:", rebuilt_conv_layer.weight.data.shape)
-            print("→ Example values (first 2 weights):")
-            print(rebuilt_conv_layer.weight.data[:2, :2])  # First 2x2 weights in rebuilt model
-
-            expected = prune_meta_data[step_idx]["pruned_weights"][inspect_layer][:2, :2]
-            actual = rebuilt_conv_layer.weight.data[:2, :2].to(expected.device)
-
-            if torch.allclose(expected, actual, atol=1e-5):
-                print("✅ Weights were correctly copied into the rebuilt model!")
-            else:
-                print("❌ Weight mismatch! Rebuilding may be incorrect.")
-
-            # e) Freeze channels if needed
-            # rebuilt_model = freeze_channels(rebuilt_model, unprune_meta_data[step_idx]["unpruned_info"])
             rebuilt_model = rebuilt_model.to(device).to(torch.float32)
             print("Rebuilt model----->", rebuilt_model)
-            # f) Evaluate the newly rebuilt
-            rb_acc = evaluate_model(rebuilt_model, test_dataloader, device)
-            rb_params = count_parameters(rebuilt_model)
-            rb_size = model_size_in_mb(rebuilt_model)
 
             # g) Fine-tune the rebuilt
             print("[Backward Rebuild] Fine-tuning rebuilt model...")
-            # fine_tuner_zerograd(rebuilt_model, train_dataloader, val_dataloader, freeze_dim0, freeze_dim1, device, pruning_percentage = prune_ratios[step_idx], fineTuningType="rebuild", epochs=fine_tune_epochs, scheduler_type=schedulers, LR=fine_tune_lr)
+            fine_tuner_zerograd(rebuilt_model, train_dataloader, val_dataloader, freeze_dim0, freeze_dim1, device, pruning_percentage = prune_ratios[step_idx], fineTuningType="rebuild", epochs=fine_tune_epochs, scheduler_type=schedulers, LR=fine_tune_lr)
 
             # h) Evaluate after fine-tune
-            r_ft_acc = evaluate_model(rebuilt_model, test_dataloader, device)
-            r_ft_size = model_size_in_mb(rebuilt_model)
+            rebuild_accuracy = evaluate_model(rebuilt_model, test_dataloader, device)
+            rebuild_params = count_parameters(rebuilt_model)
+            rebuild_model_size = model_size_in_mb(rebuilt_model)
 
             iteration_results.append({
                 "step": f"backward_{step_idx+1}",
-                "acc": r_ft_acc,
-                "params": rb_params,
-                "size_mb": r_ft_size
+                "acc": rebuild_accuracy,
+                "params": rebuild_params,
+                "size_mb": rebuild_model_size
             })
 
     return iteration_results
@@ -178,7 +155,8 @@ def iterative_depgraph_pruning(
 # 3) The main function that calls iterative_depgraph_pruning
 # -----------------------------------------
 def main(schedulers, lrs, epochs):
-    wandb.init(project='ResNet_Iterative', name='ResNet_Iterative')
+    print("VGG ITERATIVE PRUNING")
+    wandb.init(project='VGG_Iterative', name='VGG_Iterative')
     wandb_logger = WandbLogger(log_model=False)
 
     device = get_device()
@@ -188,7 +166,7 @@ def main(schedulers, lrs, epochs):
     train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
 
     # Let's define some pruning ratios
-    iterative_ratios = [0.1] 
+    iterative_ratios = [0.2, 0.2, 0.2] 
 
     # Call the iterative pruning function
     results = iterative_depgraph_pruning(
@@ -199,8 +177,8 @@ def main(schedulers, lrs, epochs):
         device=device,
         prune_ratios=iterative_ratios,
         fine_tune_epochs=epochs,
-        fine_tune_lr=lrs,
-        schedulers=schedulers,
+        fine_tune_lr= lrs,
+        schedulers= schedulers,
         rebuild=True
     )
 
@@ -213,12 +191,10 @@ def main(schedulers, lrs, epochs):
 
 if __name__ == "__main__":
     schedulers = ['cosine']
-    # schedulers = ['exponential', 'cyclic', 'Default']
     # schedulers = ['cosine', 'step', 'exponential', 'cyclic', 'Default']
-    # lrs = [1e-2, 1e-3, 1e-4, 1e-5]
     lrs = [1e-3]
     epochs = [100]
-    model_name = "VGG"
+    model_name = "VGG_Iterative"
 
     for sch in schedulers:
         for lr in lrs:
