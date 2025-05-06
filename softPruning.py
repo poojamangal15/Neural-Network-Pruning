@@ -13,14 +13,14 @@ from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, ge
 
 
 
-def main(schedulers, lrs, epochs):
+def main(model_depth, schedulers, lrs, epochs):
     print("SOFT PRUNING RESNET WITHOUT GLOBAL ON")
     wandb.init(project='ResNet_softPruning', name='ResNetSoftPrune')
     wandb_logger = WandbLogger(log_model=False)
 
     device = get_device()
 
-    model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_resnet20", pretrained=True).to(device)
+    model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_resnet56", pretrained=True).to(device)
     print("MODEL BEFORE PRUNING", model)
 
     pruning_percentages = [0.3, 0.5, 0.7]
@@ -48,7 +48,7 @@ def main(schedulers, lrs, epochs):
         pruned_model, pruned_and_unpruned_info = soft_pruning(model, model_to_be_pruned, device, pruning_percentage=pruning_percentage)
         pruned_model = pruned_model.to(device)
 
-        core_model = Resnet_General(pruned_and_unpruned_info['num_unpruned_channels']).to(device)
+        core_model = Resnet_General(pruned_and_unpruned_info['num_unpruned_channels'], model_depth).to(device)
         copy_weights_from_dict(core_model, pruned_and_unpruned_info['unpruned_weights'])
 
         print("coremodel", core_model)
@@ -129,8 +129,9 @@ if __name__ == "__main__":
     lrs = [1e-3]
     epochs = [100]
     model_name = "ResNet20"
+    model_depth = 56
 
     for sch in schedulers:
         for lr in lrs:
             for epoch in epochs:
-                 main(schedulers=sch, lrs=lr, epochs=epoch)
+                 main(model_depth, schedulers=sch, lrs=lr, epochs=epoch)

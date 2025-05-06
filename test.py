@@ -1,62 +1,106 @@
-# Re-import necessary libraries after code state reset
+# import matplotlib.pyplot as plt
+
+# # Updated iterative accuracy data
+# iterative_data = {
+#     "ResNet-56": {
+#         "steps": ['original', 'forward_3', 'backward_3', 'backward_2', 'backward_1'],
+#         "accuracy": [0.8649681528662421, 0.7179617834394905, 0.7577070063694268, 0.7864968152866242, 0.8012738853503185]
+#     },
+#     "ResNet-20": {
+#         "steps": ['original', 'forward_3', 'backward_3', 'backward_2', 'backward_1'],
+#         "accuracy": [0.915, 0.7602, 0.8071, 0.8231, 0.8303]
+#     },
+#     "AlexNet": {
+#         "steps": ['original', 'forward_3', 'backward_3', 'backward_2', 'backward_1'],
+#         "accuracy": [0.9016, 0.7648, 0.8286, 0.8567, 0.8625]
+#     },
+#     "VGG-16": {
+#         "steps": ['original', 'forward_3', 'backward_3', 'backward_2', 'backward_1'],
+#         "accuracy": [0.9394, 0.8587, 0.8599, 0.8679, 0.8802]
+#     }
+# }
+
+# # Plotting
+# fig, axes = plt.subplots(2, 2, figsize=(9, 7))
+# fig.suptitle("Iterative Pruning and Rebuilding Accuracy", fontsize=18)
+
+# # Map models to subplot positions
+# positions = [(0, 0), (0, 1), (1, 0), (1, 1)]
+
+# for (model, data), pos in zip(iterative_data.items(), positions):
+#     ax = axes[pos]
+#     ax.plot(data["steps"], data["accuracy"], marker='o', linestyle='-', linewidth=2)
+#     ax.set_title(model, fontsize=14)
+#     ax.set_xlabel("Step", fontsize=12)
+#     ax.set_ylabel("Accuracy", fontsize=12)
+#     ax.set_xticks(range(len(data["steps"])))
+#     ax.set_xticklabels(data["steps"], rotation=30)
+#     ax.grid(True, linestyle='--', alpha=0.6)
+#     ax.set_ylim(min(data["accuracy"]) - 0.05, 1.0)
+
+# plt.tight_layout(rect=[0, 0, 1, 0.96])
+# plt.show()
+
+
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Pruning percentages
-pruning_percents = [30, 50, 70]
-
-# Model sizes (MB) for VGG
-vgg_original = [58.24] * 3
-vgg_pruned = [29.45, 15.66, 6.49]
-vgg_rebuilt = [58.24] * 3
-
-# Model sizes (MB) for AlexNet
-alexnet_original = [217.61] * 3
-alexnet_pruned = [170.38, 138.91, 108.69]
-alexnet_rebuilt = [217.61] * 3
-
-# Model sizes (MB) for ResNet-20
-resnet_original = [1.08] * 3
-resnet_pruned = [0.531, 0.282, 0.128]
-resnet_rebuilt = [1.08] * 3
+# Model data for all three networks
+data = {
+    "VGG-16": {
+        "pruning": ["30%", "50%", "70%"],
+        "original": {"size": [58.24]*3, "params": [15253578]*3},
+        "pruned": {"size": [28.50, 14.61, 5.24], "params": [7458867, 3818538, 1363717]},
+        "rebuilt": {"size": [58.24]*3, "params": [15253578]*3}
+    },
+    "AlexNet": {
+        "pruning": ["30%", "50%", "70%"],
+        "original": {"size": [217.61]*3, "params": [57044810]*3},
+        "pruned": {"size": [119.20, 35.99, 5.39], "params": [31245867, 9434983, 1410371]},
+        "rebuilt": {"size": [217.61]*3, "params": [57044810]*3}
+    },
+    "ResNet-20": {
+        "pruning": ["30%", "50%", "70%"],
+        "original": {"size": [1.08]*3, "params": [272474]*3},
+        "pruned": {"size": [0.53, 0.30, 0.13], "params": [129359, 68786, 23580]},
+        "rebuilt": {"size": [1.08]*3, "params": [272474]*3}
+    }
+}
 
 # Plotting
+fig, axes = plt.subplots(2, 3, figsize=(15, 7))
+fig.suptitle("Model Size and Parameter Count across Pruning Levels", fontsize=16)
+
 bar_width = 0.25
-x = np.arange(len(pruning_percents))
+x = np.arange(3)
 
-fig, axs = plt.subplots(1, 3, figsize=(18, 6), sharey=False)
+for i, (model, vals) in enumerate(data.items()):
+    # Model size
+    axes[0, i].bar(x - bar_width, vals["original"]["size"], width=bar_width, label='Original', color='gray')
+    axes[0, i].bar(x, vals["pruned"]["size"], width=bar_width, label='Pruned', color='orange')
+    axes[0, i].bar(x + bar_width, vals["rebuilt"]["size"], width=bar_width, label='Rebuilt', color='cyan')
+    axes[0, i].set_title(model)
+    axes[0, i].set_xticks(x)
+    axes[0, i].set_xticklabels(vals["pruning"])
+    axes[0, i].set_ylabel("Model Size (MB)")
+    # axes[0, i].grid(True, linestyle='--', alpha=0.6)
 
-# VGG Plot
-axs[0].bar(x - bar_width, vgg_original, width=bar_width, label="Original", color='gray')
-axs[0].bar(x, vgg_pruned, width=bar_width, label="Pruned + FT", color='orange')
-axs[0].bar(x + bar_width, vgg_rebuilt, width=bar_width, label="Rebuilt + FT", color='cyan')
-axs[0].set_title("VGG-16")
-axs[0].set_xticks(x)
-axs[0].set_xticklabels([f"{p}%" for p in pruning_percents])
-axs[0].set_ylabel("Model Size (MB)")
-axs[0].grid(True, axis='y', linestyle='--', alpha=0.7)
+    # Parameter count (converted to millions)
+    original_params = np.array(vals["original"]["params"]) / 1e6
+    pruned_params = np.array(vals["pruned"]["params"]) / 1e6
+    rebuilt_params = np.array(vals["rebuilt"]["params"]) / 1e6
 
-# AlexNet Plot
-axs[1].bar(x - bar_width, alexnet_original, width=bar_width, color='gray')
-axs[1].bar(x, alexnet_pruned, width=bar_width, color='orange')
-axs[1].bar(x + bar_width, alexnet_rebuilt, width=bar_width, color='cyan')
-axs[1].set_title("AlexNet")
-axs[1].set_xticks(x)
-axs[1].set_xticklabels([f"{p}%" for p in pruning_percents])
-axs[1].grid(True, axis='y', linestyle='--', alpha=0.7)
+    axes[1, i].bar(x - bar_width, original_params, width=bar_width, color='gray')
+    axes[1, i].bar(x, pruned_params, width=bar_width, color='orange')
+    axes[1, i].bar(x + bar_width, rebuilt_params, width=bar_width, color='cyan')
+    axes[1, i].set_title(model)
+    axes[1, i].set_xticks(x)
+    axes[1, i].set_xticklabels(vals["pruning"])
+    axes[1, i].set_ylabel("Params (Millions)")
+    # axes[1, i].grid(True, linestyle='--', alpha=0.6)
 
-# ResNet Plot (rescaled for better visibility)
-axs[2].bar(x - bar_width, resnet_original, width=bar_width, color='gray')
-axs[2].bar(x, resnet_pruned, width=bar_width, color='orange')
-axs[2].bar(x + bar_width, resnet_rebuilt, width=bar_width, color='cyan')
-axs[2].set_title("ResNet-20")
-axs[2].set_xticks(x)
-axs[2].set_xticklabels([f"{p}%" for p in pruning_percents])
-axs[2].grid(True, axis='y', linestyle='--', alpha=0.7)
-
-# Common legend and layout
-fig.suptitle("Comparing Model Size Across Pruning Stages")
-fig.legend(["Original", "Pruned", "Rebuilt"], loc="lower center", ncol=3, fontsize=12)
-fig.tight_layout(rect=[0, 0.05, 1, 0.95])
-
+# Common legend
+handles, labels = axes[0, 0].get_legend_handles_labels()
+fig.legend(handles, labels, loc='lower center', ncol=3, fontsize=12)
+plt.tight_layout(rect=[0, 0.05, 1, 0.95])
 plt.show()

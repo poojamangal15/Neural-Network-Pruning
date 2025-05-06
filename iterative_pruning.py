@@ -6,13 +6,14 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 import torch.nn as nn
 
-from utils.data_utils import load_data
+from utils.data_utils import load_data, load_imagenette
 from utils.eval_utils import evaluate_model, count_parameters, model_size_in_mb
 # from utils.device_utils import get_device
 from utils.pruning_analysis import get_device, prune_model,  get_pruned_info, get_unpruned_info, extend_channels, Resnet_General, calculate_last_conv_out_features, get_core_weights, reconstruct_weights_from_dicts, freeze_channels, fine_tuner, high_level_pruner, high_level_prunerTaylor, hessian_based_pruner, reconstruct_Global_weights_from_dicts, fine_tuner_zerograd, soft_pruning, copy_weights_from_dict
+from torchvision.models import resnet50
+from utils.resNet56_fineTuner import ResNet56FineTuner
 
 
-# Iterative pruning approach: Prune all steps then do a reverse rebuilding
 def iterative_depgraph_pruning(
     model,
     train_dataloader,
@@ -23,7 +24,8 @@ def iterative_depgraph_pruning(
     fine_tune_epochs=5,
     fine_tune_lr=1e-4,
     schedulers = 'cosine',
-    rebuild=True
+    rebuild=True,
+    model_depth=20
 ):
     """
     Perform iterative pruning using DepGraph-based approach.
@@ -35,9 +37,9 @@ def iterative_depgraph_pruning(
 
     orig_params = count_parameters(model)
     orig_accuracy = evaluate_model(model, test_dataloader, device)
-    print("Initial accuracy", orig_accuracy)
     orig_model_size = model_size_in_mb(model)
 
+    print("Original accuracy", orig_accuracy)
 
     pruned_models_info = []
     current_model = copy.deepcopy(model)
@@ -78,9 +80,9 @@ def iterative_depgraph_pruning(
         
         models.append(copy.deepcopy(core_model))
        # 2) Evaluate after pruning
-        pruned_params = count_parameters(core_model)
-        pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
-        pruned_model_size = model_size_in_mb(core_model)
+        # pruned_params = count_parameters(core_model)
+        # pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
+        # pruned_model_size = model_size_in_mb(core_model)
 
         prune_meta_data.append({"pruned_info" : pruned_and_unpruned_info['pruned_info'], "num_pruned_channels" : pruned_and_unpruned_info['num_pruned_channels'], "pruned_weights" : pruned_and_unpruned_info['pruned_weights']}) 
         unprune_meta_data.append({"unpruned_info" : pruned_and_unpruned_info['unpruned_info'], "num_unpruned_channels" : pruned_and_unpruned_info['num_unpruned_channels'], "unpruned_weights" : pruned_and_unpruned_info['unpruned_weights']})
@@ -88,21 +90,21 @@ def iterative_depgraph_pruning(
         current_model = core_model
         prev_model = copy.deepcopy(core_model)
     
-        # 3) Fine tune
-        print(f"[Iterative] Fine-tuning pruned model for {fine_tune_epochs} epochs.")
-        fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage = ratio, fineTuningType = "pruning", epochs=fine_tune_epochs, scheduler_type=schedulers, LR=fine_tune_lr)
+    # 3) Fine tune
+    print(f"[Iterative] Fine-tuning pruned model for {fine_tune_epochs} epochs.")
+    fine_tuner(core_model, train_dataloader, val_dataloader, device, pruning_percentage = ratio, fineTuningType = "pruning", epochs=fine_tune_epochs, scheduler_type=schedulers, LR=fine_tune_lr)
 
-        # Evaluate after fine tuning
-        pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
-        pruned_model_size = model_size_in_mb(core_model)
-        pm_params = count_parameters(core_model)
+    # Evaluate after fine tuning
+    pruned_accuracy = evaluate_model(core_model, test_dataloader, device)
+    pruned_model_size = model_size_in_mb(core_model)
+    pruned_params = count_parameters(core_model)
 
-        iteration_results.append({
-                "step": f"forward_{i}",
-                "acc": pruned_accuracy,
-                "params": pruned_params,
-                "size_mb": pruned_model_size
-            })
+    iteration_results.append({
+            "step": f"forward_{i}",
+            "acc": pruned_accuracy,
+            "params": pruned_params,
+            "size_mb": pruned_model_size
+        })
 
     # 4) Rebuild logic
     if rebuild:
@@ -116,7 +118,7 @@ def iterative_depgraph_pruning(
             new_channels = extend_channels(model_state_pruned, prune_meta_data[step_idx]["num_pruned_channels"])
             
             # b) Construct a fresh "ResNet"
-            rebuilt_model = Resnet_General(new_channels).to(device)
+            rebuilt_model = Resnet_General(new_channels, model_depth).to(device)
             # print("temp rebuilt", rebuilt_model)
             # c) Copy core weights
             get_core_weights(model_state_pruned, unprune_meta_data[step_idx]["unpruned_weights"])
@@ -154,16 +156,31 @@ def iterative_depgraph_pruning(
 # -----------------------------------------
 # 3) The main function that calls iterative_depgraph_pruning
 # -----------------------------------------
-def main(schedulers, lrs, epochs):
+def main(model_depth, schedulers, lrs, epochs):
     wandb.init(project='ResNet_Iterative', name='ResNet_Iterative')
     wandb_logger = WandbLogger(log_model=False)
 
     device = get_device()
     # Load your original AlexNetFineTuner
-    model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_resnet20", pretrained=True).to(device)
-    # Load data
-    train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
+    print("MODEL DEPTH", model_depth)
 
+    if model_depth==20:
+        model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_resnet20", pretrained=True).to(device)
+        train_dataloader, val_dataloader, test_dataloader = load_data(data_dir='./data', batch_size=32, val_split=0.2)
+    elif model_depth==56:
+        print("MODEL DEPTH IN ELIF", model_depth)
+        # model = torch.hub.load( "chenyaofo/pytorch-cifar-models", "cifar10_resnet56", pretrained=True).to(device)
+        checkpoint_path = "./checkpoints/res56_imagenette.ckpt"
+        model = ResNet56FineTuner.load_from_checkpoint(checkpoint_path).to(device)
+        train_dataloader, val_dataloader, test_dataloader = load_imagenette(data_dir='./data/imagenette2', batch_size=32, val_split=0.2)
+    else:
+        model = resnet50(pretrained=True)
+        model.fc = nn.Linear(model.fc.in_features, 10)  # Imagenette has 10 classes
+        train_dataloader, val_dataloader, test_dataloader = load_imagenette(data_dir='./data/imagenette2',batch_size=32,val_split=0.2, num_workers=4)
+
+    # Load data
+
+    print("INITIAL MODEL", model)
     # Let's define some pruning ratios
     iterative_ratios = [0.2, 0.2, 0.2] 
 
@@ -178,7 +195,8 @@ def main(schedulers, lrs, epochs):
         fine_tune_epochs=epochs,
         fine_tune_lr= lrs,
         schedulers= schedulers,
-        rebuild=True
+        rebuild=True,
+        model_depth=model_depth
     )
 
     print("\n[FINAL] Iterative Pruning Results:")
@@ -193,9 +211,11 @@ if __name__ == "__main__":
     # schedulers = ['cosine', 'step', 'exponential', 'cyclic', 'Default']
     lrs = [1e-3]
     epochs = [100]
-    model_name = "ResNet20_Iterative"
+    model_name = "ResNet50_Iterative"
+
+    model_depth = 20
 
     for sch in schedulers:
         for lr in lrs:
             for epoch in epochs:
-                 main(schedulers=sch, lrs=lr, epochs=epoch)
+                 main(model_depth, schedulers=sch, lrs=lr, epochs=epoch)

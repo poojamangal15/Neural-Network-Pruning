@@ -1,5 +1,9 @@
 from torchvision.datasets import CIFAR10
-from torchvision.transforms import Compose, Resize, ToTensor, Normalize, RandomHorizontalFlip, RandomRotation, ColorJitter
+from torchvision.datasets import ImageFolder
+from torchvision.transforms import (
+    Compose, RandomResizedCrop, RandomHorizontalFlip, RandomRotation,
+    ColorJitter, ToTensor, Normalize, Resize, CenterCrop
+)
 from torch.utils.data import random_split, DataLoader
 import torch
 
@@ -37,48 +41,95 @@ def load_data(data_dir='./data', batch_size=32, val_split=0.2):
     return train_dataloader, val_dataloader, test_dataloader
 
 
+# def load_imagenette_data(
+#     data_dir: str = './data/imagenette2',
+#     batch_size: int = 32,
+#     val_split: float = 0.2,
+#     num_workers: int = 4
+# ):
+#     """
+#     Loads Imagenette2-160 from:
+#         data_dir/train/<class>/*.JPEG
+#         data_dir/val/<class>/*.JPEG
+
+#     Splits the train folder into train/val, and uses val folder as test set.
+#     Returns: train_loader, val_loader, test_loader
+#     """
+#     # --- Transforms ---
+#     train_transform = Compose([
+#         RandomResizedCrop(160),
+#         RandomHorizontalFlip(p=0.5),
+#         RandomRotation(degrees=15),
+#         ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+#         ToTensor(),
+#         Normalize(mean=[0.485, 0.456, 0.406],
+#                   std=[0.229, 0.224, 0.225]),
+#     ])
+#     test_transform = Compose([
+#         Resize(160),
+#         CenterCrop(160),
+#         ToTensor(),
+#         Normalize(mean=[0.485, 0.456, 0.406],
+#                   std=[0.229, 0.224, 0.225]),
+#     ])
+
+#     # --- Datasets ---
+#     full_train = ImageFolder(root=f"{data_dir}/train", transform=train_transform)
+#     test_set  = ImageFolder(root=f"{data_dir}/val",   transform=test_transform)
+
+#     # split train→ train/val
+#     val_size   = int(len(full_train) * val_split)
+#     train_size = len(full_train) - val_size
+#     train_set, val_set = random_split(full_train, [train_size, val_size])
+
+#     # --- Dataloaders ---
+#     train_loader = DataLoader(
+#         train_set, batch_size=batch_size, shuffle=True,
+#         num_workers=num_workers, pin_memory=True
+#     )
+#     val_loader = DataLoader(
+#         val_set, batch_size=batch_size, shuffle=False,
+#         num_workers=num_workers, pin_memory=True
+#     )
+#     test_loader = DataLoader(
+#         test_set, batch_size=batch_size, shuffle=False,
+#         num_workers=num_workers, pin_memory=True
+#     )
+
+#     return train_loader, val_loader, test_loader
+
+# data_utils.py
 from torchvision import datasets, transforms
+from torch.utils.data import DataLoader, random_split
 
-def load_data_imagenet(data_dir='/path/to/imagenet', batch_size=256, workers=8):
-    """
-    Loads ImageNet data from a standard folder structure:
-      data_dir/train/<class>/*.JPEG
-      data_dir/val/<class>/*.JPEG
+def load_imagenette(data_dir="./data/imagenette2",
+                    batch_size=128,
+                    val_split=0.1,
+                    num_workers=8):
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
 
-    Returns:
-        train_dataloader, val_dataloader
-    """
-
-    # Standard ImageNet normalization
-    # (mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    # Typical transforms:
-    train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(224),
+    train_tf = transforms.Compose([
+        transforms.Resize(40),          # small augmentation
+        transforms.RandomCrop(32),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406],
-                             [0.229, 0.224, 0.225]),
+        normalize,
     ])
-
-    val_transform = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
+    val_tf = transforms.Compose([
+        transforms.Resize(32),
+        transforms.CenterCrop(32),
         transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406],
-                             [0.229, 0.224, 0.225]),
+        normalize,
     ])
 
-    # The standard subfolders: data_dir/train & data_dir/val
-    train_dataset = datasets.ImageFolder(root=f"{data_dir}/train", transform=train_transform)
-    val_dataset   = datasets.ImageFolder(root=f"{data_dir}/val",   transform=val_transform)
+    full_train = datasets.ImageFolder(f"{data_dir}/train", transform=train_tf)
+    n_val = int(len(full_train) * val_split)
+    train_ds, val_ds = random_split(full_train, [len(full_train)-n_val, n_val])
+    test_ds = datasets.ImageFolder(f"{data_dir}/val", transform=val_tf)
 
-    train_dataloader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True,
-        num_workers=workers, pin_memory=True
-    )
-    val_dataloader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=batch_size, shuffle=False,
-        num_workers=workers, pin_memory=True
-    )
+    def loader(ds, shuffle):
+        return DataLoader(ds, batch_size=batch_size, shuffle=shuffle,
+                          num_workers=num_workers, pin_memory=True)
 
-    return train_dataloader, val_dataloader
+    return loader(train_ds, True), loader(val_ds, False), loader(test_ds, False)
